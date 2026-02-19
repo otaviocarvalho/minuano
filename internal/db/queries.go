@@ -288,6 +288,90 @@ func AtomicClaim(pool *pgxpool.Pool, agentID string, capability *string) (*Task,
 	return &t, nil
 }
 
+// ClaimByID claims a specific task by ID (with partial matching).
+// Returns an error if the task is not found, not ready, or has reached max attempts.
+func ClaimByID(pool *pgxpool.Pool, taskID, agentID string) (*Task, error) {
+	resolvedID, err := ResolvePartialID(pool, taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning claim tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Verify task is claimable and claim it.
+	var t Task
+	err = tx.QueryRow(ctx, `
+		UPDATE tasks
+		SET    status     = 'claimed',
+		       claimed_by = $1,
+		       claimed_at = NOW(),
+		       attempt    = attempt + 1
+		WHERE  id         = $2
+		  AND  status     = 'ready'
+		  AND  attempt    < max_attempts
+		RETURNING id, title, body, status, priority, capability, claimed_by, claimed_at,
+		          done_at, created_at, attempt, max_attempts, project_id, metadata
+	`, agentID, resolvedID).Scan(
+		&t.ID, &t.Title, &t.Body, &t.Status, &t.Priority, &t.Capability,
+		&t.ClaimedBy, &t.ClaimedAt, &t.DoneAt, &t.CreatedAt, &t.Attempt,
+		&t.MaxAttempts, &t.ProjectID, &t.Metadata,
+	)
+	if err == pgx.ErrNoRows {
+		// Determine reason for failure.
+		var status string
+		var attempt, maxAttempts int
+		scanErr := pool.QueryRow(ctx, `SELECT status, attempt, max_attempts FROM tasks WHERE id = $1`, resolvedID).Scan(&status, &attempt, &maxAttempts)
+		if scanErr != nil {
+			return nil, fmt.Errorf("task %q not found", resolvedID)
+		}
+		if attempt >= maxAttempts {
+			return nil, fmt.Errorf("task %q has reached max attempts (%d/%d)", resolvedID, attempt, maxAttempts)
+		}
+		return nil, fmt.Errorf("task %q is not ready (status: %s)", resolvedID, status)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("claiming task: %w", err)
+	}
+
+	// Inject inherited context from done dependencies.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO task_context (task_id, agent_id, kind, content, source_task)
+		SELECT $1, $2, 'inherited', tc.content, tc.task_id
+		FROM   task_deps td
+		JOIN   task_context tc ON tc.task_id = td.depends_on
+		                      AND tc.kind IN ('result', 'observation', 'handoff', 'test_failure')
+		JOIN   tasks dep       ON dep.id = td.depends_on
+		                      AND dep.status = 'done'
+		WHERE  td.task_id = $1
+	`, t.ID, agentID)
+	if err != nil {
+		return nil, fmt.Errorf("injecting inherited context: %w", err)
+	}
+
+	// Update agent status if agent is registered.
+	_, err = tx.Exec(ctx, `
+		UPDATE agents
+		SET    task_id   = $2,
+		       status    = 'working',
+		       last_seen = NOW()
+		WHERE  id = $1
+	`, agentID, t.ID)
+	if err != nil {
+		return nil, fmt.Errorf("updating agent: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing claim: %w", err)
+	}
+
+	return &t, nil
+}
+
 // MarkDone marks a task as done after tests pass, recording the result summary.
 func MarkDone(pool *pgxpool.Pool, taskID, agentID, summary string) error {
 	ctx := context.Background()
