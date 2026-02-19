@@ -12,42 +12,42 @@ import (
 
 // Task represents a work unit.
 type Task struct {
-	ID          string
-	Title       string
-	Body        string
-	Status      string
-	Priority    int
-	Capability  *string
-	ClaimedBy   *string
-	ClaimedAt   *time.Time
-	DoneAt      *time.Time
-	CreatedAt   time.Time
-	Attempt     int
-	MaxAttempts int
-	ProjectID   *string
-	Metadata    json.RawMessage
+	ID          string          `json:"id"`
+	Title       string          `json:"title"`
+	Body        string          `json:"body"`
+	Status      string          `json:"status"`
+	Priority    int             `json:"priority"`
+	Capability  *string         `json:"capability,omitempty"`
+	ClaimedBy   *string         `json:"claimed_by,omitempty"`
+	ClaimedAt   *time.Time      `json:"claimed_at,omitempty"`
+	DoneAt      *time.Time      `json:"done_at,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
+	Attempt     int             `json:"attempt"`
+	MaxAttempts int             `json:"max_attempts"`
+	ProjectID   *string         `json:"project_id,omitempty"`
+	Metadata    json.RawMessage `json:"metadata,omitempty"`
 }
 
 // TaskContext represents a persistent context entry for a task.
 type TaskContext struct {
-	ID         int64
-	TaskID     string
-	AgentID    *string
-	Kind       string
-	Content    string
-	SourceTask *string
-	CreatedAt  time.Time
+	ID         int64      `json:"id"`
+	TaskID     string     `json:"task_id"`
+	AgentID    *string    `json:"agent_id,omitempty"`
+	Kind       string     `json:"kind"`
+	Content    string     `json:"content"`
+	SourceTask *string    `json:"source_task,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
 }
 
 // Agent represents a running agent instance.
 type Agent struct {
-	ID          string
-	TmuxSession string
-	TmuxWindow  string
-	TaskID      *string
-	Status      string
-	StartedAt   time.Time
-	LastSeen    *time.Time
+	ID          string     `json:"id"`
+	TmuxSession string     `json:"tmux_session"`
+	TmuxWindow  string     `json:"tmux_window"`
+	TaskID      *string    `json:"task_id,omitempty"`
+	Status      string     `json:"status"`
+	StartedAt   time.Time  `json:"started_at"`
+	LastSeen    *time.Time `json:"last_seen,omitempty"`
 }
 
 // TreeNode is a task with its children for tree rendering.

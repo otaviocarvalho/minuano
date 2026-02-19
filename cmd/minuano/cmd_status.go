@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"text/tabwriter"
@@ -9,7 +10,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var statusProject string
+var (
+	statusProject string
+	statusJSON    bool
+)
 
 var statusCmd = &cobra.Command{
 	Use:   "status",
@@ -31,6 +35,18 @@ var statusCmd = &cobra.Command{
 		tasks, err := db.ListTasks(pool, projPtr)
 		if err != nil {
 			return err
+		}
+
+		if statusJSON {
+			if tasks == nil {
+				tasks = []*db.Task{}
+			}
+			data, err := json.MarshalIndent(tasks, "", "  ")
+			if err != nil {
+				return fmt.Errorf("marshaling JSON: %w", err)
+			}
+			fmt.Println(string(data))
+			return nil
 		}
 
 		if len(tasks) == 0 {
@@ -56,6 +72,7 @@ var statusCmd = &cobra.Command{
 
 func init() {
 	statusCmd.Flags().StringVar(&statusProject, "project", "", "filter by project ID")
+	statusCmd.Flags().BoolVar(&statusJSON, "json", false, "output as JSON")
 	rootCmd.AddCommand(statusCmd)
 }
 

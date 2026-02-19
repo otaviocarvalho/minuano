@@ -56,4 +56,7 @@ func TestStatusCommandFlags(t *testing.T) {
 	if statusCmd.Flags().Lookup("project") == nil {
 		t.Error("expected --project flag on status command")
 	}
+	if statusCmd.Flags().Lookup("json") == nil {
+		t.Error("expected --json flag on status command")
+	}
 }
