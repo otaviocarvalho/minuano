@@ -208,8 +208,8 @@ func GetTaskWithContext(pool *pgxpool.Pool, id string) (*Task, []*TaskContext, e
 }
 
 // AtomicClaim atomically claims one ready task, injects inherited context, and updates the agent.
-// Returns nil if no task is available.
-func AtomicClaim(pool *pgxpool.Pool, agentID string, capability *string) (*Task, error) {
+// Returns nil if no task is available. When projectID is non-nil, only claims from that project.
+func AtomicClaim(pool *pgxpool.Pool, agentID string, capability *string, projectID *string) (*Task, error) {
 	ctx := context.Background()
 
 	tx, err := pool.Begin(ctx)
@@ -224,6 +224,10 @@ func AtomicClaim(pool *pgxpool.Pool, agentID string, capability *string) (*Task,
 	if capability != nil {
 		cap = *capability
 	}
+	var proj interface{}
+	if projectID != nil {
+		proj = *projectID
+	}
 
 	err = tx.QueryRow(ctx, `
 		UPDATE tasks
@@ -235,6 +239,7 @@ func AtomicClaim(pool *pgxpool.Pool, agentID string, capability *string) (*Task,
 			SELECT id FROM tasks
 			WHERE  status = 'ready'
 			  AND  (capability IS NULL OR capability = $2)
+			  AND  ($3::text IS NULL OR project_id = $3)
 			  AND  attempt < max_attempts
 			ORDER  BY priority DESC, created_at ASC
 			LIMIT  1
@@ -242,7 +247,7 @@ func AtomicClaim(pool *pgxpool.Pool, agentID string, capability *string) (*Task,
 		)
 		RETURNING id, title, body, status, priority, capability, claimed_by, claimed_at,
 		          done_at, created_at, attempt, max_attempts, project_id, metadata
-	`, agentID, cap).Scan(
+	`, agentID, cap, proj).Scan(
 		&t.ID, &t.Title, &t.Body, &t.Status, &t.Priority, &t.Capability,
 		&t.ClaimedBy, &t.ClaimedAt, &t.DoneAt, &t.CreatedAt, &t.Attempt,
 		&t.MaxAttempts, &t.ProjectID, &t.Metadata,
