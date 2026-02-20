@@ -145,6 +145,9 @@ else
   exit 1
 fi
 
+# Drop and recreate schema so migrate always has work to do.
+psql "$DB_URL" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" >/dev/null 2>&1
+
 expect_contains "minuano migrate applies schema" "Applied" run_minuano migrate
 
 # Idempotent.
@@ -214,7 +217,7 @@ expect_contains "minuano status shows tasks" "Validate design" run_minuano statu
 expect_contains "minuano tree shows structure" "Validate" run_minuano tree
 
 # Show (partial ID).
-PARTIAL_ID="${TASK1_ID:0:8}"
+PARTIAL_ID="${TASK1_ID:0:16}"
 expect_contains "minuano show with partial ID" "Validate design" run_minuano show "$PARTIAL_ID"
 
 # Search (create some context first).
