@@ -304,7 +304,9 @@ bindings. Ignore events for unbound projects.
 ## Phase 4: Event-driven auto mode
 
 The current `/auto` mode sends a loop prompt to Claude and hopes for the best.
-With events, Tramuntana can orchestrate the loop itself:
+With events, Tramuntana can orchestrate the loop itself — claiming tasks,
+waiting for completion, reacting to merges and conflicts, all driven by
+Postgres notifications.
 
 ### Current flow (fire-and-forget)
 
@@ -316,26 +318,8 @@ Bot:  sends loop prompt to Claude
 
 ### New flow (event-driven)
 
-```
-User: /auto
-Bot:  claims first task via bridge
-      sends single-task prompt to Claude
-      waits for task_done event from watcher
-      ↓
-Bot:  "Task design-auth completed. Tests passed."
-      "Merged → main (a1b2c3d)"
-      "2 tasks now ready: impl-endpoints, write-tests"
-      claims next task
-      sends single-task prompt
-      waits for task_done event
-      ↓
-Bot:  "Task impl-endpoints completed."
-      ...
-      ↓
-Bot:  "Queue empty. All 5 tasks completed."
-```
-
-### Implementation
+Tramuntana drives the loop. Claude gets single-task prompts. Each step is
+triggered by a Postgres notification, not polling or hope.
 
 ```go
 // internal/bot/auto.go
@@ -360,7 +344,6 @@ func (b *Bot) runAutoMode(ctx context.Context, topic TopicInfo, project string) 
             b.sendToTopic(topic, formatCompletion(event))
         case event := <-b.taskFailedForTopic(topic):
             b.sendToTopic(topic, formatFailure(event))
-            // Optionally retry or stop
         case <-ctx.Done():
             return
         }
@@ -372,79 +355,244 @@ The key change: `select` on event channels replaces hope. Each step is visible
 in the Telegram topic. The user can `/esc` to cancel, or watch the autonomous
 loop progress in real time.
 
-### Auto mode with worktrees
-
-Combine with `/pickw` for full isolation:
-
-```
-User: /auto --worktrees
-Bot:  creates worktree for first task
-      sends prompt in new topic
-      waits for task_done
-      ↓
-Bot:  "Task done. Merging..."
-      waits for merge_merged
-      ↓
-Bot:  "Merged → main. Cleaning up worktree."
-      claims next task, creates new worktree
-      ...
-```
-
-Each task gets its own topic, worktree, and branch. Merge happens automatically.
-Conflicts create merge topics (existing `/merge` flow). All driven by events.
-
----
-
-## Telegram UX: what the user sees
-
-### Passive notifications (any project-bound topic)
-
-When tasks change state, all topics bound to that project get updates:
-
-```
-Bot: ✓ Task design-auth completed by agent-1
-Bot: → 2 tasks now ready: impl-endpoints, write-tests
-Bot: ✓ Merged minuano/backend-design-auth → main (a1b2c3d)
-Bot: ✗ Task write-tests failed (attempt 2/3): test timeout
-```
-
-These appear even if the user isn't running `/auto` — pure observability. Any
-topic bound via `/project backend` sees backend events.
-
-### Active auto mode (driving topic)
-
-The topic that ran `/auto` gets the same notifications plus orchestration:
-
-```
-Bot: Auto mode started for project backend (3 ready tasks)
-Bot: Claimed: design-auth (priority 8)
-     [Claude works in this topic's window]
-Bot: ✓ Task design-auth completed. Tests passed.
-Bot: ✓ Merged → main (a1b2c3d)
-Bot: Claimed: impl-endpoints (priority 7)
-     [Claude works]
-Bot: ✓ Task impl-endpoints completed.
-Bot: → Queue empty. Auto mode finished. 5/5 tasks done.
-```
-
 ### Interactive control during auto mode
-
-The user can interact during auto mode without breaking the loop:
 
 - Send a message → forwarded to Claude as usual (interrupt/guide)
 - `/esc` → interrupt current work, auto mode pauses
 - `/tasks` → show current queue state
 - `/stop` (new command) → cancel auto mode, leave current task claimed
 
-### Merge conflict notification
+---
+
+## Telegram UX: three topic levels
+
+With worktree auto mode, there are three levels of Telegram topics. Each has
+a distinct role and receives different events.
+
+### Topic hierarchy
 
 ```
-Bot: ⚠ Merge conflict on minuano/backend-impl-endpoints
-     Conflicted files: internal/auth/handler.go, internal/auth/middleware.go
-     Created topic: "merge-impl-endpoints [backend]"
-     [Claude resolving conflicts in new topic]
-Bot: ✓ Merge conflict resolved → main (f8g9h0i)
+Project topic "backend"          ← orchestrator, sees all events, drives the loop
+  ├── Task topic "design-auth [backend]"     ← isolated Claude session in worktree
+  ├── Task topic "impl-endpoints [backend]"  ← isolated Claude session in worktree
+  ├── Merge topic "merge-impl-endpoints [backend]"  ← only on conflict
+  └── Task topic "write-tests [backend]"     ← isolated Claude session in worktree
 ```
+
+### Example: full auto mode cycle with worktrees
+
+Given a project `backend` with 3 tasks:
+- `design-auth` (priority 8, no deps)
+- `impl-endpoints` (priority 7, depends on design-auth)
+- `write-tests` (priority 5, depends on design-auth)
+
+#### Project topic "backend"
+
+This is where the user runs `/auto --worktrees`. It orchestrates the full cycle
+and receives all notifications. The user watches progress here.
+
+```
+User:     /auto --worktrees
+Bot:      Auto mode started for project backend
+          1 task ready, 2 blocked
+
+          ── Task 1/3 ──────────────────────────────────
+
+          Claimed: design-auth (priority 8)
+          Created topic: "design-auth [backend]"
+          Branch: minuano/backend-design-auth
+
+                    [Claude works in the task topic]
+                    [NOTIFY task_done ← minuano-done]
+
+Bot:      ✓ design-auth completed: "Implemented JWT auth with refresh tokens"
+          Merging minuano/backend-design-auth → main...
+
+                    [minuano merge processes queue]
+                    [NOTIFY merge_merged]
+
+Bot:      ✓ Merged → main (a1b2c3d)
+          Worktree cleaned up.
+
+                    [trigger cascades: impl-endpoints, write-tests → ready]
+                    [NOTIFY task_ready × 2]
+
+Bot:      → 2 tasks now ready: impl-endpoints, write-tests
+
+          ── Task 2/3 ──────────────────────────────────
+
+          Claimed: impl-endpoints (priority 7)
+          Created topic: "impl-endpoints [backend]"
+          Branch: minuano/backend-impl-endpoints
+
+                    [Claude works in the task topic]
+                    [NOTIFY task_done]
+
+Bot:      ✓ impl-endpoints completed: "Added REST endpoints with validation"
+          Merging minuano/backend-impl-endpoints → main...
+
+                    [merge hits conflict]
+                    [NOTIFY merge_conflict]
+
+Bot:      ⚠ Merge conflict on minuano/backend-impl-endpoints
+          Conflicted files:
+            - internal/auth/handler.go
+            - internal/auth/middleware.go
+          Created topic: "merge-impl-endpoints [backend]"
+
+                    [Claude resolves conflicts in merge topic]
+                    [NOTIFY merge_merged]
+
+Bot:      ✓ Conflict resolved → main (e5f6g7h)
+          Worktree cleaned up.
+
+          ── Task 3/3 ──────────────────────────────────
+
+          Claimed: write-tests (priority 5)
+          Created topic: "write-tests [backend]"
+          Branch: minuano/backend-write-tests
+
+                    [Claude works in the task topic]
+                    [NOTIFY task_done]
+
+Bot:      ✓ write-tests completed: "Added 47 tests, all passing"
+          Merging minuano/backend-write-tests → main...
+
+                    [NOTIFY merge_merged]
+
+Bot:      ✓ Merged → main (i9j0k1l)
+          Worktree cleaned up.
+          → Queue empty. Auto mode finished. 3/3 tasks done.
+```
+
+#### Task topic "design-auth [backend]"
+
+Created automatically by the auto loop. Contains one Claude Code session
+working in an isolated worktree. Sees only its own streaming output — normal
+tool results, status line, interactive prompts. Does not see other tasks or
+merge events.
+
+```
+Bot:      Working on: design-auth
+          Branch: minuano/backend-design-auth
+          [task prompt sent to Claude]
+
+          ... normal Claude streaming output ...
+          **Read**(internal/auth/handler.go) → Read 45 lines
+          **Write**(internal/auth/jwt.go) → Wrote 120 lines
+          **Bash**(go test ./internal/auth/...) → Output 8 lines
+          ...
+
+Bot:      ✓ Tests passed. Task marked done.
+```
+
+The topic persists after completion. The user can scroll back to review what
+Claude did, or close it to clean up.
+
+#### Merge topic "merge-impl-endpoints [backend]"
+
+Only created when a merge has conflicts. Contains a Claude session with the
+conflict resolution prompt. Sees only the merge work.
+
+```
+Bot:      Merge conflict: minuano/backend-impl-endpoints → main
+          Conflicted files:
+            - internal/auth/handler.go
+            - internal/auth/middleware.go
+
+          [conflict resolution prompt sent to Claude]
+
+          ... Claude reads conflict markers, resolves ...
+          **Read**(internal/auth/handler.go) → Read 89 lines
+          **Edit**(internal/auth/handler.go) → Added 3, removed 8
+          **Bash**(go test ./...) → Output 4 lines
+          ...
+
+Bot:      ✓ Conflicts resolved. Merged → main (e5f6g7h)
+```
+
+### Example: auto mode without worktrees (single topic)
+
+Simpler variant — everything happens in one topic, one tmux window. No merge
+queue involved since there are no branches to merge.
+
+```
+Project topic "backend":
+
+User:     /auto
+Bot:      Auto mode started for project backend
+          1 task ready, 2 blocked
+          Claimed: design-auth (priority 8)
+
+          [task prompt sent to Claude in THIS topic's window]
+
+          ... Claude streaming output ...
+          **Read**(internal/auth/handler.go) → Read 45 lines
+          **Write**(internal/auth/jwt.go) → Wrote 120 lines
+          **Bash**(go test ./internal/auth/...) → Output 8 lines
+
+                    [NOTIFY task_done]
+
+Bot:      ✓ design-auth completed: "Implemented JWT auth with refresh tokens"
+          → 2 tasks now ready: impl-endpoints, write-tests
+          Claimed: impl-endpoints (priority 7)
+
+          [new single-task prompt sent to same window]
+
+          ... Claude streaming output ...
+
+                    [NOTIFY task_done]
+
+Bot:      ✓ impl-endpoints completed: "Added REST endpoints with validation"
+          Claimed: write-tests (priority 5)
+
+          ... Claude streaming output ...
+
+                    [NOTIFY task_done]
+
+Bot:      ✓ write-tests completed: "Added 47 tests, all passing"
+          → Queue empty. Auto mode finished. 3/3 tasks done.
+```
+
+### Example: passive notifications (no auto mode)
+
+Any topic bound to a project via `/project backend` receives state-change
+notifications even if it's not running auto mode. Pure observability — the
+user can watch progress while agents work elsewhere (via `minuano run` or
+another Tramuntana topic).
+
+```
+Topic bound to project "backend" (not running /auto):
+
+Bot:      → design-auth claimed by agent-1
+Bot:      ✓ design-auth completed by agent-1
+Bot:      ✓ Merged minuano/backend-design-auth → main (a1b2c3d)
+Bot:      → 2 tasks now ready: impl-endpoints, write-tests
+Bot:      → impl-endpoints claimed by agent-2
+Bot:      → write-tests claimed by agent-1
+Bot:      ✓ impl-endpoints completed by agent-2
+Bot:      ⚠ write-tests failed (attempt 2/3): test timeout
+Bot:      → write-tests back to ready (will retry)
+Bot:      ✓ write-tests completed by agent-1
+Bot:      → Queue empty. All 3 tasks done.
+```
+
+### Event routing summary
+
+| Event | Project topic | Task topic | Merge topic |
+|-------|:------------:|:----------:|:-----------:|
+| `task_ready` | ✓ (+ claims next in auto) | — | — |
+| `task_done` | ✓ (+ triggers merge) | ✓ (own task only) | — |
+| `task_failed` | ✓ (+ decides retry/stop) | ✓ (own task only) | — |
+| `merge_merged` | ✓ (+ cleans worktree) | — | ✓ (own merge only) |
+| `merge_conflict` | ✓ (+ creates merge topic) | — | — |
+| `merge_failed` | ✓ (+ pauses auto) | — | ✓ (own merge only) |
+| Claude streaming | — | ✓ | ✓ |
+| Status line | — | ✓ | ✓ |
+| Interactive UI | — | ✓ | ✓ |
+
+The project topic never shows Claude streaming output — it's the control plane.
+Task and merge topics show Claude output — they're the data plane.
 
 ---
 
