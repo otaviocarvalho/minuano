@@ -41,13 +41,33 @@ type TaskContext struct {
 
 // Agent represents a running agent instance.
 type Agent struct {
-	ID          string     `json:"id"`
-	TmuxSession string     `json:"tmux_session"`
-	TmuxWindow  string     `json:"tmux_window"`
-	TaskID      *string    `json:"task_id,omitempty"`
-	Status      string     `json:"status"`
-	StartedAt   time.Time  `json:"started_at"`
-	LastSeen    *time.Time `json:"last_seen,omitempty"`
+	ID           string     `json:"id"`
+	TmuxSession  string     `json:"tmux_session"`
+	TmuxWindow   string     `json:"tmux_window"`
+	TaskID       *string    `json:"task_id,omitempty"`
+	Status       string     `json:"status"`
+	StartedAt    time.Time  `json:"started_at"`
+	LastSeen     *time.Time `json:"last_seen,omitempty"`
+	WorktreeDir  *string    `json:"worktree_dir,omitempty"`
+	Branch       *string    `json:"branch,omitempty"`
+}
+
+// MergeQueueEntry represents an entry in the merge queue.
+type MergeQueueEntry struct {
+	ID            int64      `json:"id"`
+	TaskID        string     `json:"task_id"`
+	AgentID       string     `json:"agent_id"`
+	Branch        string     `json:"branch"`
+	WorktreeDir   string     `json:"worktree_dir"`
+	BaseBranch    string     `json:"base_branch"`
+	Status        string     `json:"status"`
+	CommitSHA     *string    `json:"commit_sha,omitempty"`
+	MergeSHA      *string    `json:"merge_sha,omitempty"`
+	ConflictFiles []string   `json:"conflict_files,omitempty"`
+	ErrorMsg      *string    `json:"error_msg,omitempty"`
+	EnqueuedAt    time.Time  `json:"enqueued_at"`
+	StartedAt     *time.Time `json:"started_at,omitempty"`
+	CompletedAt   *time.Time `json:"completed_at,omitempty"`
 }
 
 // TreeNode is a task with its children for tree rendering.
@@ -591,11 +611,11 @@ func SearchContext(pool *pgxpool.Pool, query string) ([]*TaskContext, error) {
 }
 
 // RegisterAgent inserts a new agent record.
-func RegisterAgent(pool *pgxpool.Pool, id, tmuxSession, tmuxWindow string) error {
+func RegisterAgent(pool *pgxpool.Pool, id, tmuxSession, tmuxWindow string, worktreeDir, branch *string) error {
 	_, err := pool.Exec(context.Background(), `
-		INSERT INTO agents (id, tmux_session, tmux_window, last_seen)
-		VALUES ($1, $2, $3, NOW())
-	`, id, tmuxSession, tmuxWindow)
+		INSERT INTO agents (id, tmux_session, tmux_window, last_seen, worktree_dir, branch)
+		VALUES ($1, $2, $3, NOW(), $4, $5)
+	`, id, tmuxSession, tmuxWindow, worktreeDir, branch)
 	if err != nil {
 		return fmt.Errorf("registering agent: %w", err)
 	}
@@ -605,7 +625,8 @@ func RegisterAgent(pool *pgxpool.Pool, id, tmuxSession, tmuxWindow string) error
 // ListAgents returns all registered agents.
 func ListAgents(pool *pgxpool.Pool) ([]*Agent, error) {
 	rows, err := pool.Query(context.Background(), `
-		SELECT id, tmux_session, tmux_window, task_id, status, started_at, last_seen
+		SELECT id, tmux_session, tmux_window, task_id, status, started_at, last_seen,
+		       worktree_dir, branch
 		FROM agents
 		ORDER BY started_at ASC
 	`)
@@ -617,7 +638,8 @@ func ListAgents(pool *pgxpool.Pool) ([]*Agent, error) {
 	var agents []*Agent
 	for rows.Next() {
 		var a Agent
-		if err := rows.Scan(&a.ID, &a.TmuxSession, &a.TmuxWindow, &a.TaskID, &a.Status, &a.StartedAt, &a.LastSeen); err != nil {
+		if err := rows.Scan(&a.ID, &a.TmuxSession, &a.TmuxWindow, &a.TaskID, &a.Status, &a.StartedAt, &a.LastSeen,
+			&a.WorktreeDir, &a.Branch); err != nil {
 			return nil, fmt.Errorf("scanning agent: %w", err)
 		}
 		agents = append(agents, &a)
@@ -696,9 +718,11 @@ func HasUnmetDeps(pool *pgxpool.Pool, taskID string) (bool, error) {
 func GetAgentByTaskID(pool *pgxpool.Pool, taskID string) (*Agent, error) {
 	var a Agent
 	err := pool.QueryRow(context.Background(), `
-		SELECT id, tmux_session, tmux_window, task_id, status, started_at, last_seen
+		SELECT id, tmux_session, tmux_window, task_id, status, started_at, last_seen,
+		       worktree_dir, branch
 		FROM agents WHERE task_id = $1
-	`, taskID).Scan(&a.ID, &a.TmuxSession, &a.TmuxWindow, &a.TaskID, &a.Status, &a.StartedAt, &a.LastSeen)
+	`, taskID).Scan(&a.ID, &a.TmuxSession, &a.TmuxWindow, &a.TaskID, &a.Status, &a.StartedAt, &a.LastSeen,
+		&a.WorktreeDir, &a.Branch)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -712,9 +736,11 @@ func GetAgentByTaskID(pool *pgxpool.Pool, taskID string) (*Agent, error) {
 func GetAgent(pool *pgxpool.Pool, id string) (*Agent, error) {
 	var a Agent
 	err := pool.QueryRow(context.Background(), `
-		SELECT id, tmux_session, tmux_window, task_id, status, started_at, last_seen
+		SELECT id, tmux_session, tmux_window, task_id, status, started_at, last_seen,
+		       worktree_dir, branch
 		FROM agents WHERE id = $1
-	`, id).Scan(&a.ID, &a.TmuxSession, &a.TmuxWindow, &a.TaskID, &a.Status, &a.StartedAt, &a.LastSeen)
+	`, id).Scan(&a.ID, &a.TmuxSession, &a.TmuxWindow, &a.TaskID, &a.Status, &a.StartedAt, &a.LastSeen,
+		&a.WorktreeDir, &a.Branch)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -722,6 +748,135 @@ func GetAgent(pool *pgxpool.Pool, id string) (*Agent, error) {
 		return nil, fmt.Errorf("getting agent: %w", err)
 	}
 	return &a, nil
+}
+
+// EnqueueMerge adds an entry to the merge queue.
+func EnqueueMerge(pool *pgxpool.Pool, taskID, agentID, branch, worktreeDir, baseBranch, commitSHA string) error {
+	_, err := pool.Exec(context.Background(), `
+		INSERT INTO merge_queue (task_id, agent_id, branch, worktree_dir, base_branch, commit_sha)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, taskID, agentID, branch, worktreeDir, baseBranch, commitSHA)
+	if err != nil {
+		return fmt.Errorf("enqueuing merge: %w", err)
+	}
+	return nil
+}
+
+// ClaimMergeEntry atomically claims the next pending merge queue entry.
+// Returns nil if no entry is available.
+func ClaimMergeEntry(pool *pgxpool.Pool) (*MergeQueueEntry, error) {
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning merge claim tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var e MergeQueueEntry
+	err = tx.QueryRow(ctx, `
+		UPDATE merge_queue
+		SET    status     = 'merging',
+		       started_at = NOW()
+		WHERE  id = (
+			SELECT id FROM merge_queue
+			WHERE  status = 'pending'
+			ORDER  BY enqueued_at ASC
+			LIMIT  1
+			FOR UPDATE SKIP LOCKED
+		)
+		RETURNING id, task_id, agent_id, branch, worktree_dir, base_branch, status,
+		          commit_sha, merge_sha, conflict_files, error_msg,
+		          enqueued_at, started_at, completed_at
+	`).Scan(
+		&e.ID, &e.TaskID, &e.AgentID, &e.Branch, &e.WorktreeDir, &e.BaseBranch, &e.Status,
+		&e.CommitSHA, &e.MergeSHA, &e.ConflictFiles, &e.ErrorMsg,
+		&e.EnqueuedAt, &e.StartedAt, &e.CompletedAt,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("claiming merge entry: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing merge claim: %w", err)
+	}
+	return &e, nil
+}
+
+// CompleteMerge marks a merge queue entry as merged.
+func CompleteMerge(pool *pgxpool.Pool, id int64, mergeSHA string) error {
+	_, err := pool.Exec(context.Background(), `
+		UPDATE merge_queue
+		SET    status       = 'merged',
+		       merge_sha    = $2,
+		       completed_at = NOW()
+		WHERE  id = $1
+	`, id, mergeSHA)
+	if err != nil {
+		return fmt.Errorf("completing merge: %w", err)
+	}
+	return nil
+}
+
+// ConflictMerge marks a merge queue entry as conflicted.
+func ConflictMerge(pool *pgxpool.Pool, id int64, conflictFiles []string) error {
+	_, err := pool.Exec(context.Background(), `
+		UPDATE merge_queue
+		SET    status         = 'conflict',
+		       conflict_files = $2,
+		       completed_at   = NOW()
+		WHERE  id = $1
+	`, id, conflictFiles)
+	if err != nil {
+		return fmt.Errorf("recording merge conflict: %w", err)
+	}
+	return nil
+}
+
+// FailMerge marks a merge queue entry as failed.
+func FailMerge(pool *pgxpool.Pool, id int64, errMsg string) error {
+	_, err := pool.Exec(context.Background(), `
+		UPDATE merge_queue
+		SET    status       = 'failed',
+		       error_msg    = $2,
+		       completed_at = NOW()
+		WHERE  id = $1
+	`, id, errMsg)
+	if err != nil {
+		return fmt.Errorf("failing merge: %w", err)
+	}
+	return nil
+}
+
+// ListMergeQueue returns all merge queue entries, ordered by enqueue time.
+func ListMergeQueue(pool *pgxpool.Pool) ([]*MergeQueueEntry, error) {
+	rows, err := pool.Query(context.Background(), `
+		SELECT id, task_id, agent_id, branch, worktree_dir, base_branch, status,
+		       commit_sha, merge_sha, conflict_files, error_msg,
+		       enqueued_at, started_at, completed_at
+		FROM merge_queue
+		ORDER BY enqueued_at ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("listing merge queue: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []*MergeQueueEntry
+	for rows.Next() {
+		var e MergeQueueEntry
+		if err := rows.Scan(
+			&e.ID, &e.TaskID, &e.AgentID, &e.Branch, &e.WorktreeDir, &e.BaseBranch, &e.Status,
+			&e.CommitSHA, &e.MergeSHA, &e.ConflictFiles, &e.ErrorMsg,
+			&e.EnqueuedAt, &e.StartedAt, &e.CompletedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scanning merge entry: %w", err)
+		}
+		entries = append(entries, &e)
+	}
+	return entries, rows.Err()
 }
 
 func scanTasks(rows pgx.Rows) ([]*Task, error) {

@@ -31,6 +31,21 @@ if [ "$EXIT_CODE" -eq 0 ]; then
     WHERE id='$AGENT_ID';
   "
   echo "✓ Done: $TASK_ID"
+
+  # Worktree mode: auto-commit and enqueue for merge.
+  if [ -n "${WORKTREE_DIR:-}" ] && [ -n "${BRANCH:-}" ]; then
+    git -C "$WORKTREE_DIR" add -A
+    if ! git -C "$WORKTREE_DIR" diff --cached --quiet 2>/dev/null; then
+      COMMIT_SHA=$(git -C "$WORKTREE_DIR" commit -m "minuano: $TASK_ID — $SUMMARY" --quiet && \
+                   git -C "$WORKTREE_DIR" rev-parse HEAD)
+      BASE_BRANCH="${MINUANO_BASE_BRANCH:-main}"
+      psql "$DB" -c "
+        INSERT INTO merge_queue (task_id, agent_id, branch, worktree_dir, base_branch, commit_sha)
+        VALUES ('$TASK_ID', '$AGENT_ID', '$BRANCH', '$WORKTREE_DIR', '$BASE_BRANCH', '$COMMIT_SHA');
+      "
+      echo "✓ Committed $COMMIT_SHA on $BRANCH, enqueued for merge into $BASE_BRANCH"
+    fi
+  fi
 else
   ATTEMPT=$(psql "$DB" -t -A -c "SELECT attempt FROM tasks WHERE id='$TASK_ID'")
   MAX=$(psql "$DB" -t -A -c "SELECT max_attempts FROM tasks WHERE id='$TASK_ID'")

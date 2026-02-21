@@ -88,4 +88,35 @@ func TestAgentJSONTags(t *testing.T) {
 			t.Errorf("expected %s in JSON, got: %s", f, s)
 		}
 	}
+
+	// Omitempty fields should not appear when nil.
+	omittedFields := []string{`"worktree_dir"`, `"branch"`}
+	for _, f := range omittedFields {
+		if strings.Contains(s, f) {
+			t.Errorf("expected %s to be omitted from JSON, got: %s", f, s)
+		}
+	}
+
+	// With worktree fields set.
+	wt := "/tmp/worktree"
+	br := "minuano/agent-1"
+	agentWT := Agent{
+		ID:          "agent-2",
+		TmuxSession: "minuano",
+		TmuxWindow:  "agent-2",
+		Status:      "idle",
+		StartedAt:   time.Now(),
+		WorktreeDir: &wt,
+		Branch:      &br,
+	}
+	data, err = json.Marshal(agentWT)
+	if err != nil {
+		t.Fatalf("failed to marshal Agent with worktree: %v", err)
+	}
+	s = string(data)
+	for _, f := range []string{`"worktree_dir"`, `"branch"`} {
+		if !strings.Contains(s, f) {
+			t.Errorf("expected %s in JSON, got: %s", f, s)
+		}
+	}
 }

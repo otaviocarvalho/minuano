@@ -46,7 +46,7 @@ func printAgents() error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(w, "  \tAGENT\tSTATUS\tTASK\tLAST SEEN\n")
+	fmt.Fprintf(w, "  \tAGENT\tSTATUS\tTASK\tBRANCH\tLAST SEEN\n")
 	for _, a := range agents {
 		sym := "○"
 		if a.Status == "working" {
@@ -56,11 +56,15 @@ func printAgents() error {
 		if a.TaskID != nil {
 			taskID = *a.TaskID
 		}
+		branch := "—"
+		if a.Branch != nil {
+			branch = *a.Branch
+		}
 		lastSeen := "—"
 		if a.LastSeen != nil {
 			lastSeen = relativeTime(*a.LastSeen)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", sym, a.ID, a.Status, taskID, lastSeen)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", sym, a.ID, a.Status, taskID, branch, lastSeen)
 	}
 	w.Flush()
 	return nil

@@ -44,3 +44,13 @@ Your agent ID is in $AGENT_ID. Your database is in $DATABASE_URL.
 - One task per outer loop iteration. Exit after `minuano-done` returns success.
 - Do not ask for clarification. Make a reasonable interpretation, note it as an observation,
   proceed.
+
+## Worktree Mode
+
+When `$WORKTREE_DIR` and `$BRANCH` are set, you are running in an isolated git worktree:
+
+- **Your working directory** is `$WORKTREE_DIR`, a dedicated copy of the repo on branch `$BRANCH`.
+- **Do not switch branches.** Stay on `$BRANCH` at all times.
+- **Do not merge manually.** `minuano-done` auto-commits your changes and enqueues them for
+  merge into the base branch. A separate `minuano merge` process handles merging.
+- All other rules still apply — claim, implement, call `minuano-done`.

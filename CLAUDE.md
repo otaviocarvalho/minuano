@@ -89,6 +89,16 @@ Track which task you're on. When you complete a task, note it here:
 - [x] I-04 — `minuano-pick` script
 - [x] I-05 — `--project` flag on `minuano-claim`
 - [x] I-06 — `minuano prompt` command
+- [x] 27 — Worktree + Merge Queue Migration
+- [x] 28 — Agent + Merge Queue DB Queries
+- [x] 29 — Git Package
+- [x] 30 — Tmux `NewWindowWithDir`
+- [x] 31 — Agent Worktree-Aware Spawn/Kill
+- [x] 32 — `--worktrees` flag on run/spawn
+- [x] 33 — Auto-commit + enqueue in minuano-done
+- [x] 34 — `minuano merge` command
+- [x] 35 — Agents display BRANCH column + .gitignore
+- [x] 36 — Agent CLAUDE.md worktree awareness
 
 ## Conventions
 

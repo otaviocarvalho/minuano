@@ -5,11 +5,15 @@ import (
 	"os"
 
 	"github.com/otavio/minuano/internal/agent"
+	"github.com/otavio/minuano/internal/git"
 	"github.com/otavio/minuano/internal/tmux"
 	"github.com/spf13/cobra"
 )
 
-var spawnCapability string
+var (
+	spawnCapability string
+	spawnWorktrees  bool
+)
 
 var spawnCmd = &cobra.Command{
 	Use:   "spawn <name>",
@@ -39,18 +43,38 @@ var spawnCmd = &cobra.Command{
 			"DATABASE_URL": dbURL,
 		}
 
+		// Pre-flight checks for worktree mode.
+		if spawnWorktrees {
+			if _, err := git.RepoRoot(); err != nil {
+				return fmt.Errorf("--worktrees requires a git repository: %w", err)
+			}
+			if dirty, _ := git.HasUncommittedChanges(); dirty {
+				fmt.Println("warning: working tree has uncommitted changes")
+			}
+		}
+
 		name := args[0]
-		a, err := agent.Spawn(pool, session, name, claudeMD, env)
+		var a *agent.Agent
+		if spawnWorktrees {
+			a, err = agent.SpawnWithWorktree(pool, session, name, claudeMD, env)
+		} else {
+			a, err = agent.Spawn(pool, session, name, claudeMD, env)
+		}
 		if err != nil {
 			return fmt.Errorf("spawning %s: %w", name, err)
 		}
 
-		fmt.Printf("Spawned: %s  →  %s:%s\n", a.ID, a.TmuxSession, a.TmuxWindow)
+		if a.WorktreeDir != nil {
+			fmt.Printf("Spawned: %s  →  %s:%s  (worktree: %s, branch: %s)\n", a.ID, a.TmuxSession, a.TmuxWindow, *a.WorktreeDir, *a.Branch)
+		} else {
+			fmt.Printf("Spawned: %s  →  %s:%s\n", a.ID, a.TmuxSession, a.TmuxWindow)
+		}
 		return nil
 	},
 }
 
 func init() {
 	spawnCmd.Flags().StringVar(&spawnCapability, "capability", "", "agent capability")
+	spawnCmd.Flags().BoolVar(&spawnWorktrees, "worktrees", false, "isolate agent in a git worktree")
 	rootCmd.AddCommand(spawnCmd)
 }

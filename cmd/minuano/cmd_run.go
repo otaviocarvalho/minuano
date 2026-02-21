@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/otavio/minuano/internal/agent"
+	"github.com/otavio/minuano/internal/git"
 	"github.com/otavio/minuano/internal/tmux"
 	"github.com/spf13/cobra"
 )
@@ -16,6 +17,7 @@ var (
 	runNames      string
 	runCapability string
 	runAttach     bool
+	runWorktrees  bool
 )
 
 var runCmd = &cobra.Command{
@@ -45,6 +47,16 @@ var runCmd = &cobra.Command{
 			"DATABASE_URL": dbURL,
 		}
 
+		// Pre-flight checks for worktree mode.
+		if runWorktrees {
+			if _, err := git.RepoRoot(); err != nil {
+				return fmt.Errorf("--worktrees requires a git repository: %w", err)
+			}
+			if dirty, _ := git.HasUncommittedChanges(); dirty {
+				fmt.Println("warning: working tree has uncommitted changes")
+			}
+		}
+
 		// Determine agent names.
 		var names []string
 		if runNames != "" {
@@ -57,11 +69,21 @@ var runCmd = &cobra.Command{
 		}
 
 		for _, name := range names {
-			a, err := agent.Spawn(pool, session, name, claudeMD, env)
+			var a *agent.Agent
+			var err error
+			if runWorktrees {
+				a, err = agent.SpawnWithWorktree(pool, session, name, claudeMD, env)
+			} else {
+				a, err = agent.Spawn(pool, session, name, claudeMD, env)
+			}
 			if err != nil {
 				return fmt.Errorf("spawning %s: %w", name, err)
 			}
-			fmt.Printf("Spawned: %s  →  %s:%s\n", a.ID, a.TmuxSession, a.TmuxWindow)
+			if a.WorktreeDir != nil {
+				fmt.Printf("Spawned: %s  →  %s:%s  (worktree: %s, branch: %s)\n", a.ID, a.TmuxSession, a.TmuxWindow, *a.WorktreeDir, *a.Branch)
+			} else {
+				fmt.Printf("Spawned: %s  →  %s:%s\n", a.ID, a.TmuxSession, a.TmuxWindow)
+			}
 		}
 
 		if runAttach {
@@ -77,6 +99,7 @@ func init() {
 	runCmd.Flags().StringVar(&runNames, "names", "", "comma-separated agent names")
 	runCmd.Flags().StringVar(&runCapability, "capability", "", "agent capability")
 	runCmd.Flags().BoolVar(&runAttach, "attach", false, "attach to tmux session after spawning")
+	runCmd.Flags().BoolVar(&runWorktrees, "worktrees", false, "isolate each agent in a git worktree")
 	rootCmd.AddCommand(runCmd)
 }
 

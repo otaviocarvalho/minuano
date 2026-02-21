@@ -55,6 +55,30 @@ func NewWindow(session, window string, env map[string]string) error {
 	return nil
 }
 
+// NewWindowWithDir creates a new window starting in the given directory.
+func NewWindowWithDir(session, window, dir string, env map[string]string) error {
+	args := []string{"new-window", "-t", session, "-n", window, "-c", dir}
+	cmd := exec.Command("tmux", args...)
+
+	// Build environment: inherit current env + add overrides.
+	cmdEnv := os.Environ()
+	for k, v := range env {
+		cmdEnv = append(cmdEnv, k+"="+v)
+	}
+	cmd.Env = cmdEnv
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("creating window %s:%s in %s: %s: %w", session, window, dir, string(out), err)
+	}
+
+	// Set environment variables inside the tmux window.
+	for k, v := range env {
+		SendKeys(session, window, fmt.Sprintf("export %s=%q", k, v))
+	}
+
+	return nil
+}
+
 // SendKeys sends keystrokes to a tmux window.
 func SendKeys(session, window, keys string) error {
 	target := session + ":" + window

@@ -29,6 +29,9 @@ go.work.sum
 *.swo
 *~
 
+# Minuano
+.minuano/
+
 # OS
 .DS_Store
 Thumbs.db
