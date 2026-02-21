@@ -14,10 +14,12 @@ Agents atomically claim tasks from a shared queue, inherit context from dependen
 4. When a task completes, its dependents become ready automatically (via a Postgres trigger).
 5. Agents loop until the queue is empty.
 
+With `--worktrees`, each agent works in an isolated git worktree. On task completion, changes auto-commit and enqueue for merge via `minuano merge`.
+
 ## Quick start
 
 ```bash
-go build ./cmd/minuano
+make build
 
 minuano up                # start postgres (Docker)
 minuano migrate           # apply schema
@@ -26,32 +28,181 @@ minuano add "Design auth system" --priority 8
 minuano add "Implement auth endpoints" --after design-auth
 minuano tree              # visualize the DAG
 
-minuano run --agents 2    # spawn agents in tmux
-minuano agents --watch    # monitor progress
+minuano run --agents 2 --worktrees   # spawn agents in isolated worktrees
+minuano agents --watch               # monitor progress
+minuano merge --watch                # process merge queue
 ```
+
+## Minuano vs Tramuntana
+
+**Minuano** (this tool) is the headless engine. Use it for:
+
+- Batch processing — `minuano run --agents 4` and walk away
+- CI pipelines — scripted task creation and agent spawning
+- Local dev — direct terminal access to agents via `minuano attach`
+
+**[Tramuntana](https://github.com/otaviocarvalho/tramuntana)** is the Telegram interface. Use it for:
+
+- Interactive sessions — chat with Claude Code from your phone
+- Per-topic isolation — one Telegram topic = one Claude Code session
+- Mobile-friendly — screenshots, inline keyboards, rich formatting
+
+Both share the same Minuano database. Tramuntana calls Minuano commands under the hood.
 
 ## Commands
 
-```
-minuano up              Start Docker postgres container
-minuano down            Stop Docker postgres container
-minuano migrate         Run pending migrations
+### Infrastructure
 
-minuano add <title>     Create a task (--after, --priority, --capability, --test-cmd)
-minuano edit <id>       Open task body in $EDITOR
-minuano show <id>       Print task spec + full context log
-minuano tree            Print dependency tree with status symbols
-minuano status          Table view of all tasks
-minuano search <query>  Full-text search across task context
+| Command | Description |
+|---------|-------------|
+| `minuano up` | Start Docker postgres container |
+| `minuano down` | Stop Docker postgres container |
+| `minuano migrate` | Run pending database migrations |
 
-minuano run             Spawn agents in tmux (--agents N, --attach)
-minuano spawn <name>    Spawn a single named agent
-minuano agents          Show running agents (--watch)
-minuano attach [id]     Attach to tmux session or jump to agent window
-minuano logs <id>       Capture lines from agent's tmux pane
-minuano kill [id]       Kill agent(s), release claimed tasks (--all)
-minuano reclaim         Reset stale claimed tasks back to ready
-```
+### Task management
+
+**`minuano add <title>`** — Create a task
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--after <id>` | Dependency task ID (repeatable) | — |
+| `--priority <0-10>` | Task priority | `5` |
+| `--capability <str>` | Required agent capability | — |
+| `--test-cmd <str>` | Test command override | `go test ./...` |
+| `--project <id>` | Project ID | `$MINUANO_PROJECT` |
+| `--body <str>` | Task specification body | — |
+
+**`minuano show <id>`** — Print task spec + full context log
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Output as JSON |
+
+**`minuano edit <id>`** — Open task body in `$EDITOR`
+
+**`minuano status`** — Table view of all tasks
+
+| Flag | Description |
+|------|-------------|
+| `--project <id>` | Filter by project |
+| `--json` | Output as JSON |
+
+**`minuano tree`** — Print dependency tree with status symbols
+
+| Flag | Description |
+|------|-------------|
+| `--project <id>` | Filter by project |
+
+**`minuano search <query>`** — Full-text search across task context
+
+### Agent management
+
+**`minuano run`** — Spawn agents in tmux
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--agents <n>` | Number of agents | `1` |
+| `--names <a,b,c>` | Comma-separated agent names | auto-generated |
+| `--capability <str>` | Agent capability | — |
+| `--attach` | Attach to tmux after spawning | `false` |
+| `--worktrees` | Isolate each agent in a git worktree | `false` |
+
+**`minuano spawn <name>`** — Spawn a single named agent
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--capability <str>` | Agent capability | — |
+| `--worktrees` | Isolate in a git worktree | `false` |
+
+**`minuano agents`** — Show running agents
+
+| Flag | Description |
+|------|-------------|
+| `--watch` | Refresh every 2s |
+
+**`minuano attach [id]`** — Attach to tmux session; jump to agent/task window if ID given
+
+**`minuano logs <id>`** — Capture lines from agent's tmux pane
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--lines <n>` | Number of lines | `50` |
+
+**`minuano kill [id]`** — Kill agent, release claimed tasks
+
+| Flag | Description |
+|------|-------------|
+| `--all` | Kill all agents |
+
+**`minuano reclaim`** — Reset stale claimed tasks back to ready
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--minutes <n>` | Stale threshold | `30` |
+
+### Prompt generation
+
+These commands output prompts for Claude Code agents. Used by Tramuntana and agent bootstrap scripts.
+
+**`minuano prompt single <task-id>`** — Prompt for working on one task
+
+**`minuano prompt auto`** — Loop prompt that claims tasks until the queue is empty
+
+| Flag | Description |
+|------|-------------|
+| `--project <id>` | Project to claim from (`$MINUANO_PROJECT`) |
+
+**`minuano prompt batch <id1> [id2...]`** — Prompt for completing multiple tasks in sequence
+
+### Merge queue
+
+**`minuano merge`** — Process pending merge queue entries
+
+| Flag | Description |
+|------|-------------|
+| `--watch` | Poll every 5s and process continuously |
+
+**`minuano merge status`** — Show merge queue status
+
+### Global flags
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--db <url>` | Database URL | `$DATABASE_URL` |
+| `--session <name>` | Tmux session name | `$MINUANO_SESSION` or `minuano` |
+
+## Agent scripts
+
+Helper scripts placed in `$PATH` for agents at runtime. These are the agent's interface to the coordination database.
+
+| Script | Usage | Description |
+|--------|-------|-------------|
+| `minuano-claim` | `minuano-claim [--project <name>]` | Atomically claim one ready task. Prints JSON or exits empty. |
+| `minuano-pick` | `minuano-pick <task-id>` | Claim a specific task by ID (prefix match). |
+| `minuano-done` | `minuano-done <task-id> <summary>` | Run tests, mark done on pass, record failure on fail. Auto-commits and enqueues merge in worktree mode. |
+| `minuano-observe` | `minuano-observe <task-id> <note>` | Record an observation to the task's context log. |
+| `minuano-handoff` | `minuano-handoff <task-id> <note>` | Record a handoff note before long operations or context resets. |
+
+All scripts require `DATABASE_URL` and `AGENT_ID` environment variables (set automatically by `minuano spawn`).
+
+## Environment variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DATABASE_URL` | PostgreSQL connection string | — (required) |
+| `MINUANO_SESSION` | Tmux session name | `minuano` |
+| `MINUANO_PROJECT` | Default project ID for commands | — |
+| `EDITOR` | Text editor for `minuano edit` | `vi` |
+| `MINUANO_TEST_CMD` | Override test command in `minuano-done` | task metadata or `go test ./...` |
+| `MINUANO_BASE_BRANCH` | Base branch for worktree merge | `main` |
+
+Set automatically by `minuano spawn`:
+
+| Variable | Description |
+|----------|-------------|
+| `AGENT_ID` | Unique agent identifier |
+| `WORKTREE_DIR` | Absolute path to agent's worktree (worktree mode only) |
+| `BRANCH` | Git branch name `minuano/<agent-id>` (worktree mode only) |
 
 ## Requirements
 
@@ -59,10 +210,6 @@ minuano reclaim         Reset stale claimed tasks back to ready
 - Docker (for PostgreSQL)
 - tmux
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI
-
-## Telegram Interface
-
-[Tramuntana](https://github.com/otaviocarvalho/tramuntana) provides a Telegram interface for Minuano, letting you manage tasks and interact with Claude Code agents from Telegram group topics.
 
 ## License
 
