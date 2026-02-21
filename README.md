@@ -60,6 +60,10 @@ minuano reclaim         Reset stale claimed tasks back to ready
 - tmux
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI
 
+## Telegram Interface
+
+[Tramuntana](https://github.com/otaviocarvalho/tramuntana) provides a Telegram interface for Minuano, letting you manage tasks and interact with Claude Code agents from Telegram group topics.
+
 ## License
 
 MIT
