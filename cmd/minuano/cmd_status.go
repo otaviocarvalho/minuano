@@ -80,6 +80,8 @@ func statusSymbol(status string) string {
 	switch status {
 	case "pending":
 		return "○"
+	case "draft":
+		return "◌"
 	case "ready":
 		return "◎"
 	case "claimed":
@@ -88,6 +90,10 @@ func statusSymbol(status string) string {
 		return "✓"
 	case "failed":
 		return "✗"
+	case "pending_approval":
+		return "⊘"
+	case "rejected":
+		return "⊗"
 	default:
 		return "?"
 	}

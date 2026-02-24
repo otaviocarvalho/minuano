@@ -31,8 +31,8 @@ var upCmd = &cobra.Command{
 		// Wait for healthy.
 		fmt.Print("Waiting for postgres to be healthy...")
 		for i := 0; i < 30; i++ {
-			compose, composeArgs := composeCommand(composePath, "ps", "--format", "{{.Status}}")
-			out, err := exec.Command(compose, composeArgs...).Output()
+			compose, composeArgs := composeCommand(composePath, "ps")
+			out, err := exec.Command(compose, composeArgs...).CombinedOutput()
 			if err == nil && containsHealthy(string(out)) {
 				fmt.Println(" ready")
 				fmt.Println("✓ minuano-postgres started (postgres://minuano:minuano@localhost:5432/minuanodb)")

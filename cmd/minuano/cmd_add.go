@@ -14,12 +14,14 @@ import (
 )
 
 var (
-	addAfter      []string
-	addPriority   int
-	addCapability string
-	addTestCmd    string
-	addProject    string
-	addBody       string
+	addAfter            []string
+	addPriority         int
+	addCapability       string
+	addTestCmd          string
+	addProject          string
+	addBody             string
+	addStatus           string
+	addRequiresApproval bool
 )
 
 var addCmd = &cobra.Command{
@@ -29,6 +31,11 @@ var addCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := connectDB(); err != nil {
 			return err
+		}
+
+		// Validate --status flag.
+		if addStatus != "ready" && addStatus != "draft" {
+			return fmt.Errorf("invalid --status %q: must be 'ready' or 'draft'", addStatus)
 		}
 
 		title := strings.Join(args, " ")
@@ -54,7 +61,7 @@ var addCmd = &cobra.Command{
 			metadata, _ = json.Marshal(m)
 		}
 
-		if err := db.CreateTask(pool, id, title, addBody, addPriority, capability, projPtr, metadata); err != nil {
+		if err := db.CreateTask(pool, id, title, addBody, addPriority, capability, projPtr, metadata, addRequiresApproval); err != nil {
 			return err
 		}
 
@@ -69,8 +76,13 @@ var addCmd = &cobra.Command{
 			}
 		}
 
-		// Set status based on deps.
-		if len(addAfter) > 0 {
+		// Set status based on --status flag and deps.
+		if addStatus == "draft" {
+			// Draft tasks stay draft regardless of deps.
+			if err := db.SetTaskStatus(pool, id, "draft"); err != nil {
+				return err
+			}
+		} else if len(addAfter) > 0 {
 			hasUnmet, err := db.HasUnmetDeps(pool, id)
 			if err != nil {
 				return err
@@ -99,6 +111,8 @@ func init() {
 	addCmd.Flags().StringVar(&addTestCmd, "test-cmd", "", "test command override")
 	addCmd.Flags().StringVar(&addProject, "project", "", "project ID (or MINUANO_PROJECT env)")
 	addCmd.Flags().StringVar(&addBody, "body", "", "task body/specification")
+	addCmd.Flags().StringVar(&addStatus, "status", "ready", "initial task status: ready, draft")
+	addCmd.Flags().BoolVar(&addRequiresApproval, "requires-approval", false, "require human approval before execution")
 	rootCmd.AddCommand(addCmd)
 }
 

@@ -135,6 +135,7 @@ func buildSinglePrompt(task *db.Task, ctxs []*db.TaskContext) string {
 	b.WriteString("3. Work on the task. Use `minuano-observe " + task.ID + " \"<note>\"` to record findings.\n")
 	b.WriteString("4. Use `minuano-handoff " + task.ID + " \"<note>\"` before long operations.\n")
 	b.WriteString("5. When done: `minuano-done " + task.ID + " \"<summary>\"`\n")
+	b.WriteString("\n**CRITICAL:** You MUST call `minuano-done` to mark the task complete. Without it, the task stays claimed and blocks the pipeline. Do NOT use any other mechanism to track completion.\n")
 	b.WriteString("\n**Rule:** Do NOT loop. Complete this single task and return to interactive mode.\n\n")
 
 	b.WriteString(promptEnvSection())
@@ -211,6 +212,7 @@ func buildBatchPrompt(entries []taskWithContext) string {
 	}
 
 	b.WriteString("---\n\n")
+	b.WriteString("**CRITICAL:** You MUST call `minuano-done` for each task to mark it complete. Without it, tasks stay claimed and block the pipeline.\n\n")
 	b.WriteString("**After completing all tasks, return to interactive mode.**\n\n")
 
 	b.WriteString(promptEnvSection())
