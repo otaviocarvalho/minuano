@@ -4,6 +4,7 @@ BINARY = minuano
 
 build:
 	go build -o $(BINARY) ./cmd/minuano
+	go install ./cmd/minuano
 
 install:
 	go install ./cmd/minuano

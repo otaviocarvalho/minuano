@@ -12,20 +12,24 @@ import (
 
 // Task represents a work unit.
 type Task struct {
-	ID          string          `json:"id"`
-	Title       string          `json:"title"`
-	Body        string          `json:"body"`
-	Status      string          `json:"status"`
-	Priority    int             `json:"priority"`
-	Capability  *string         `json:"capability,omitempty"`
-	ClaimedBy   *string         `json:"claimed_by,omitempty"`
-	ClaimedAt   *time.Time      `json:"claimed_at,omitempty"`
-	DoneAt      *time.Time      `json:"done_at,omitempty"`
-	CreatedAt   time.Time       `json:"created_at"`
-	Attempt     int             `json:"attempt"`
-	MaxAttempts int             `json:"max_attempts"`
-	ProjectID   *string         `json:"project_id,omitempty"`
-	Metadata    json.RawMessage `json:"metadata,omitempty"`
+	ID               string          `json:"id"`
+	Title            string          `json:"title"`
+	Body             string          `json:"body"`
+	Status           string          `json:"status"`
+	Priority         int             `json:"priority"`
+	Capability       *string         `json:"capability,omitempty"`
+	ClaimedBy        *string         `json:"claimed_by,omitempty"`
+	ClaimedAt        *time.Time      `json:"claimed_at,omitempty"`
+	DoneAt           *time.Time      `json:"done_at,omitempty"`
+	CreatedAt        time.Time       `json:"created_at"`
+	Attempt          int             `json:"attempt"`
+	MaxAttempts      int             `json:"max_attempts"`
+	ProjectID        *string         `json:"project_id,omitempty"`
+	Metadata         json.RawMessage `json:"metadata,omitempty"`
+	RequiresApproval bool            `json:"requires_approval"`
+	ApprovedBy       *string         `json:"approved_by,omitempty"`
+	ApprovedAt       *time.Time      `json:"approved_at,omitempty"`
+	RejectionReason  *string         `json:"rejection_reason,omitempty"`
 }
 
 // TaskContext represents a persistent context entry for a task.
@@ -70,6 +74,23 @@ type MergeQueueEntry struct {
 	CompletedAt   *time.Time `json:"completed_at,omitempty"`
 }
 
+// taskColumns is the canonical SELECT column list for tasks.
+const taskColumns = `id, title, body, status, priority, capability, claimed_by, claimed_at,
+		       done_at, created_at, attempt, max_attempts, project_id, metadata,
+		       requires_approval, approved_by, approved_at, rejection_reason`
+
+// scanTask scans a single task row (must match taskColumns order).
+func scanTask(row pgx.Row) (Task, error) {
+	var t Task
+	err := row.Scan(
+		&t.ID, &t.Title, &t.Body, &t.Status, &t.Priority, &t.Capability,
+		&t.ClaimedBy, &t.ClaimedAt, &t.DoneAt, &t.CreatedAt, &t.Attempt,
+		&t.MaxAttempts, &t.ProjectID, &t.Metadata,
+		&t.RequiresApproval, &t.ApprovedBy, &t.ApprovedAt, &t.RejectionReason,
+	)
+	return t, err
+}
+
 // TreeNode is a task with its children for tree rendering.
 type TreeNode struct {
 	Task     *Task
@@ -77,11 +98,11 @@ type TreeNode struct {
 }
 
 // CreateTask inserts a new task.
-func CreateTask(pool *pgxpool.Pool, id, title, body string, priority int, capability, projectID *string, metadata json.RawMessage) error {
+func CreateTask(pool *pgxpool.Pool, id, title, body string, priority int, capability, projectID *string, metadata json.RawMessage, requiresApproval bool) error {
 	_, err := pool.Exec(context.Background(), `
-		INSERT INTO tasks (id, title, body, priority, capability, project_id, metadata)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, id, title, body, priority, capability, projectID, metadata)
+		INSERT INTO tasks (id, title, body, priority, capability, project_id, metadata, requires_approval)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, id, title, body, priority, capability, projectID, metadata, requiresApproval)
 	if err != nil {
 		return fmt.Errorf("creating task: %w", err)
 	}
@@ -150,16 +171,8 @@ func GetTask(pool *pgxpool.Pool, id string) (*Task, error) {
 		return nil, err
 	}
 
-	var t Task
-	err = pool.QueryRow(context.Background(), `
-		SELECT id, title, body, status, priority, capability, claimed_by, claimed_at,
-		       done_at, created_at, attempt, max_attempts, project_id, metadata
-		FROM tasks WHERE id = $1
-	`, resolvedID).Scan(
-		&t.ID, &t.Title, &t.Body, &t.Status, &t.Priority, &t.Capability,
-		&t.ClaimedBy, &t.ClaimedAt, &t.DoneAt, &t.CreatedAt, &t.Attempt,
-		&t.MaxAttempts, &t.ProjectID, &t.Metadata,
-	)
+	t, err := scanTask(pool.QueryRow(context.Background(),
+		`SELECT `+taskColumns+` FROM tasks WHERE id = $1`, resolvedID))
 	if err != nil {
 		return nil, fmt.Errorf("getting task %s: %w", resolvedID, err)
 	}
@@ -172,19 +185,13 @@ func ListTasks(pool *pgxpool.Pool, projectID *string) ([]*Task, error) {
 	var err error
 
 	if projectID != nil {
-		rows, err = pool.Query(context.Background(), `
-			SELECT id, title, body, status, priority, capability, claimed_by, claimed_at,
-			       done_at, created_at, attempt, max_attempts, project_id, metadata
-			FROM tasks WHERE project_id = $1
-			ORDER BY priority DESC, created_at ASC
-		`, *projectID)
+		rows, err = pool.Query(context.Background(),
+			`SELECT `+taskColumns+` FROM tasks WHERE project_id = $1
+			ORDER BY priority DESC, created_at ASC`, *projectID)
 	} else {
-		rows, err = pool.Query(context.Background(), `
-			SELECT id, title, body, status, priority, capability, claimed_by, claimed_at,
-			       done_at, created_at, attempt, max_attempts, project_id, metadata
-			FROM tasks
-			ORDER BY priority DESC, created_at ASC
-		`)
+		rows, err = pool.Query(context.Background(),
+			`SELECT `+taskColumns+` FROM tasks
+			ORDER BY priority DESC, created_at ASC`)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("listing tasks: %w", err)
@@ -239,7 +246,6 @@ func AtomicClaim(pool *pgxpool.Pool, agentID string, capability *string, project
 	defer tx.Rollback(ctx)
 
 	// Claim one ready task.
-	var t Task
 	var cap interface{}
 	if capability != nil {
 		cap = *capability
@@ -249,7 +255,7 @@ func AtomicClaim(pool *pgxpool.Pool, agentID string, capability *string, project
 		proj = *projectID
 	}
 
-	err = tx.QueryRow(ctx, `
+	t, claimErr := scanTask(tx.QueryRow(ctx, `
 		UPDATE tasks
 		SET    status     = 'claimed',
 		       claimed_by = $1,
@@ -265,18 +271,13 @@ func AtomicClaim(pool *pgxpool.Pool, agentID string, capability *string, project
 			LIMIT  1
 			FOR UPDATE SKIP LOCKED
 		)
-		RETURNING id, title, body, status, priority, capability, claimed_by, claimed_at,
-		          done_at, created_at, attempt, max_attempts, project_id, metadata
-	`, agentID, cap, proj).Scan(
-		&t.ID, &t.Title, &t.Body, &t.Status, &t.Priority, &t.Capability,
-		&t.ClaimedBy, &t.ClaimedAt, &t.DoneAt, &t.CreatedAt, &t.Attempt,
-		&t.MaxAttempts, &t.ProjectID, &t.Metadata,
-	)
-	if err == pgx.ErrNoRows {
+		RETURNING `+taskColumns+`
+	`, agentID, cap, proj))
+	if claimErr == pgx.ErrNoRows {
 		return nil, nil // No task available.
 	}
-	if err != nil {
-		return nil, fmt.Errorf("claiming task: %w", err)
+	if claimErr != nil {
+		return nil, fmt.Errorf("claiming task: %w", claimErr)
 	}
 
 	// Inject inherited context from done dependencies.
@@ -329,8 +330,7 @@ func ClaimByID(pool *pgxpool.Pool, taskID, agentID string) (*Task, error) {
 	defer tx.Rollback(ctx)
 
 	// Verify task is claimable and claim it.
-	var t Task
-	err = tx.QueryRow(ctx, `
+	t, err := scanTask(tx.QueryRow(ctx, `
 		UPDATE tasks
 		SET    status     = 'claimed',
 		       claimed_by = $1,
@@ -339,13 +339,8 @@ func ClaimByID(pool *pgxpool.Pool, taskID, agentID string) (*Task, error) {
 		WHERE  id         = $2
 		  AND  status     = 'ready'
 		  AND  attempt    < max_attempts
-		RETURNING id, title, body, status, priority, capability, claimed_by, claimed_at,
-		          done_at, created_at, attempt, max_attempts, project_id, metadata
-	`, agentID, resolvedID).Scan(
-		&t.ID, &t.Title, &t.Body, &t.Status, &t.Priority, &t.Capability,
-		&t.ClaimedBy, &t.ClaimedAt, &t.DoneAt, &t.CreatedAt, &t.Attempt,
-		&t.MaxAttempts, &t.ProjectID, &t.Metadata,
-	)
+		RETURNING `+taskColumns+`
+	`, agentID, resolvedID))
 	if err == pgx.ErrNoRows {
 		// Determine reason for failure.
 		var status string
@@ -879,6 +874,370 @@ func ListMergeQueue(pool *pgxpool.Pool) ([]*MergeQueueEntry, error) {
 	return entries, rows.Err()
 }
 
+// ApproveTask transitions a task from pending_approval to ready.
+func ApproveTask(pool *pgxpool.Pool, taskID, approvedBy string) error {
+	tag, err := pool.Exec(context.Background(), `
+		UPDATE tasks
+		SET    status      = 'ready',
+		       approved_by = $2,
+		       approved_at = NOW()
+		WHERE  id     = $1
+		  AND  status = 'pending_approval'
+	`, taskID, approvedBy)
+	if err != nil {
+		return fmt.Errorf("approving task: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("task %q is not pending_approval", taskID)
+	}
+	return nil
+}
+
+// RejectTask transitions a task from pending_approval to rejected.
+func RejectTask(pool *pgxpool.Pool, taskID, reason string) error {
+	tag, err := pool.Exec(context.Background(), `
+		UPDATE tasks
+		SET    status           = 'rejected',
+		       rejection_reason = $2
+		WHERE  id     = $1
+		  AND  status = 'pending_approval'
+	`, taskID, reason)
+	if err != nil {
+		return fmt.Errorf("rejecting task: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("task %q is not pending_approval", taskID)
+	}
+	return nil
+}
+
+// UnclaimTask releases a claimed task back to ready.
+func UnclaimTask(pool *pgxpool.Pool, taskID string) error {
+	tag, err := pool.Exec(context.Background(), `
+		UPDATE tasks
+		SET    status     = 'ready',
+		       claimed_by = NULL,
+		       claimed_at = NULL
+		WHERE  id     = $1
+		  AND  status = 'claimed'
+	`, taskID)
+	if err != nil {
+		return fmt.Errorf("unclaiming task: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("task %q is not claimed", taskID)
+	}
+	return nil
+}
+
+// DraftRelease transitions a single task from draft to ready (respecting deps).
+func DraftRelease(pool *pgxpool.Pool, taskID string) error {
+	// Check if task has unmet deps — if so, transition to pending instead.
+	hasUnmet, err := HasUnmetDeps(pool, taskID)
+	if err != nil {
+		return err
+	}
+	targetStatus := "ready"
+	if hasUnmet {
+		targetStatus = "pending"
+	}
+
+	tag, err := pool.Exec(context.Background(), `
+		UPDATE tasks SET status = $2 WHERE id = $1 AND status = 'draft'
+	`, taskID, targetStatus)
+	if err != nil {
+		return fmt.Errorf("releasing draft task: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("task %q is not in draft status", taskID)
+	}
+	return nil
+}
+
+// DraftReleaseAll transitions all draft tasks in a project.
+// Tasks with unmet deps go to pending; tasks with all deps met go to ready.
+func DraftReleaseAll(pool *pgxpool.Pool, projectID string) (int, error) {
+	// First, move drafts with unmet deps to pending.
+	pool.Exec(context.Background(), `
+		UPDATE tasks
+		SET    status = 'pending'
+		WHERE  status     = 'draft'
+		  AND  project_id = $1
+		  AND  id IN (
+			SELECT td.task_id
+			FROM task_deps td
+			JOIN tasks dep ON dep.id = td.depends_on
+			WHERE dep.status != 'done'
+		  )
+	`, projectID)
+
+	// Then, move remaining drafts (no unmet deps) to ready.
+	tag, err := pool.Exec(context.Background(), `
+		UPDATE tasks
+		SET    status = 'ready'
+		WHERE  status     = 'draft'
+		  AND  project_id = $1
+	`, projectID)
+	if err != nil {
+		return 0, fmt.Errorf("releasing draft tasks: %w", err)
+	}
+
+	// Count total released (both pending + ready).
+	var count int
+	pool.QueryRow(context.Background(), `
+		SELECT COUNT(*) FROM tasks
+		WHERE project_id = $1 AND status IN ('pending', 'ready')
+		  AND created_at > NOW() - INTERVAL '1 minute'
+	`, projectID).Scan(&count)
+
+	return int(tag.RowsAffected()), nil
+}
+
+// PlannerSession represents a planner session.
+type PlannerSession struct {
+	ID          string     `json:"id"`
+	TopicID     int64      `json:"topic_id"`
+	ProjectID   *string    `json:"project_id,omitempty"`
+	TmuxWindow  *string    `json:"tmux_window,omitempty"`
+	Status      string     `json:"status"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	StoppedAt   *time.Time `json:"stopped_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+}
+
+// UpsertPlannerSession creates or updates a planner session.
+func UpsertPlannerSession(pool *pgxpool.Pool, topicID int64, projectID, tmuxWindow, status string) error {
+	_, err := pool.Exec(context.Background(), `
+		INSERT INTO planner_sessions (topic_id, project_id, tmux_window, status, started_at)
+		VALUES ($1, $2, $3, $4, NOW())
+		ON CONFLICT (topic_id) DO UPDATE SET
+			tmux_window = $3,
+			status      = $4,
+			started_at  = NOW(),
+			stopped_at  = NULL
+	`, topicID, projectID, tmuxWindow, status)
+	if err != nil {
+		return fmt.Errorf("upserting planner session: %w", err)
+	}
+	return nil
+}
+
+// StopPlannerSession marks a planner session as stopped.
+func StopPlannerSession(pool *pgxpool.Pool, topicID int64) error {
+	tag, err := pool.Exec(context.Background(), `
+		UPDATE planner_sessions
+		SET    status     = 'stopped',
+		       stopped_at = NOW()
+		WHERE  topic_id = $1
+		  AND  status   IN ('running', 'crashed')
+	`, topicID)
+	if err != nil {
+		return fmt.Errorf("stopping planner session: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("no active planner session for topic %d", topicID)
+	}
+	return nil
+}
+
+// ReopenPlannerSession re-activates a stopped or crashed planner session.
+func ReopenPlannerSession(pool *pgxpool.Pool, topicID int64, tmuxWindow string) (*PlannerSession, error) {
+	var s PlannerSession
+	err := pool.QueryRow(context.Background(), `
+		UPDATE planner_sessions
+		SET    status      = 'running',
+		       tmux_window = $2,
+		       started_at  = NOW(),
+		       stopped_at  = NULL
+		WHERE  topic_id = $1
+		  AND  status   IN ('stopped', 'crashed')
+		RETURNING id, topic_id, project_id, tmux_window, status, started_at, stopped_at, created_at
+	`, topicID, tmuxWindow).Scan(
+		&s.ID, &s.TopicID, &s.ProjectID, &s.TmuxWindow, &s.Status,
+		&s.StartedAt, &s.StoppedAt, &s.CreatedAt,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, fmt.Errorf("no planner session found for topic %d", topicID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reopening planner session: %w", err)
+	}
+	return &s, nil
+}
+
+// GetPlannerSession retrieves a planner session by topic ID.
+func GetPlannerSession(pool *pgxpool.Pool, topicID int64) (*PlannerSession, error) {
+	var s PlannerSession
+	err := pool.QueryRow(context.Background(), `
+		SELECT id, topic_id, project_id, tmux_window, status, started_at, stopped_at, created_at
+		FROM planner_sessions WHERE topic_id = $1
+	`, topicID).Scan(
+		&s.ID, &s.TopicID, &s.ProjectID, &s.TmuxWindow, &s.Status,
+		&s.StartedAt, &s.StoppedAt, &s.CreatedAt,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting planner session: %w", err)
+	}
+	return &s, nil
+}
+
+// ListPlannerSessions lists all planner sessions, optionally filtered by project.
+func ListPlannerSessions(pool *pgxpool.Pool, projectID *string) ([]*PlannerSession, error) {
+	var rows pgx.Rows
+	var err error
+	if projectID != nil {
+		rows, err = pool.Query(context.Background(), `
+			SELECT id, topic_id, project_id, tmux_window, status, started_at, stopped_at, created_at
+			FROM planner_sessions WHERE project_id = $1
+			ORDER BY created_at DESC
+		`, *projectID)
+	} else {
+		rows, err = pool.Query(context.Background(), `
+			SELECT id, topic_id, project_id, tmux_window, status, started_at, stopped_at, created_at
+			FROM planner_sessions ORDER BY created_at DESC
+		`)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("listing planner sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []*PlannerSession
+	for rows.Next() {
+		var s PlannerSession
+		if err := rows.Scan(&s.ID, &s.TopicID, &s.ProjectID, &s.TmuxWindow, &s.Status,
+			&s.StartedAt, &s.StoppedAt, &s.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scanning planner session: %w", err)
+		}
+		sessions = append(sessions, &s)
+	}
+	return sessions, rows.Err()
+}
+
+// Schedule represents a recurring job schedule.
+type Schedule struct {
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Description *string         `json:"description,omitempty"`
+	Cron        string          `json:"cron"`
+	Template    json.RawMessage `json:"template"`
+	ProjectID   *string         `json:"project_id,omitempty"`
+	Enabled     bool            `json:"enabled"`
+	LastRun     *time.Time      `json:"last_run,omitempty"`
+	NextRun     *time.Time      `json:"next_run,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
+}
+
+// CreateSchedule inserts a new schedule.
+func CreateSchedule(pool *pgxpool.Pool, name, cronExpr string, template json.RawMessage, projectID, description *string, nextRun time.Time) error {
+	_, err := pool.Exec(context.Background(), `
+		INSERT INTO schedules (name, cron, template, project_id, description, next_run)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, name, cronExpr, template, projectID, description, nextRun)
+	if err != nil {
+		return fmt.Errorf("creating schedule: %w", err)
+	}
+	return nil
+}
+
+// ListSchedules returns all schedules, optionally filtered by project.
+func ListSchedules(pool *pgxpool.Pool, projectID *string) ([]*Schedule, error) {
+	var rows pgx.Rows
+	var err error
+	if projectID != nil {
+		rows, err = pool.Query(context.Background(), `
+			SELECT id, name, description, cron, template, project_id, enabled, last_run, next_run, created_at
+			FROM schedules WHERE project_id = $1 ORDER BY name
+		`, *projectID)
+	} else {
+		rows, err = pool.Query(context.Background(), `
+			SELECT id, name, description, cron, template, project_id, enabled, last_run, next_run, created_at
+			FROM schedules ORDER BY name
+		`)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("listing schedules: %w", err)
+	}
+	defer rows.Close()
+
+	var schedules []*Schedule
+	for rows.Next() {
+		var s Schedule
+		if err := rows.Scan(&s.ID, &s.Name, &s.Description, &s.Cron, &s.Template,
+			&s.ProjectID, &s.Enabled, &s.LastRun, &s.NextRun, &s.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scanning schedule: %w", err)
+		}
+		schedules = append(schedules, &s)
+	}
+	return schedules, rows.Err()
+}
+
+// GetSchedule retrieves a schedule by name.
+func GetSchedule(pool *pgxpool.Pool, name string) (*Schedule, error) {
+	var s Schedule
+	err := pool.QueryRow(context.Background(), `
+		SELECT id, name, description, cron, template, project_id, enabled, last_run, next_run, created_at
+		FROM schedules WHERE name = $1
+	`, name).Scan(&s.ID, &s.Name, &s.Description, &s.Cron, &s.Template,
+		&s.ProjectID, &s.Enabled, &s.LastRun, &s.NextRun, &s.CreatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, fmt.Errorf("schedule %q not found", name)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting schedule: %w", err)
+	}
+	return &s, nil
+}
+
+// SetScheduleEnabled toggles the enabled flag and optionally updates next_run.
+func SetScheduleEnabled(pool *pgxpool.Pool, name string, enabled bool, nextRun *time.Time) error {
+	if nextRun != nil {
+		_, err := pool.Exec(context.Background(), `
+			UPDATE schedules SET enabled = $2, next_run = $3 WHERE name = $1
+		`, name, enabled, *nextRun)
+		return err
+	}
+	_, err := pool.Exec(context.Background(), `
+		UPDATE schedules SET enabled = $2 WHERE name = $1
+	`, name, enabled)
+	return err
+}
+
+// GetDueSchedules returns enabled schedules whose next_run is at or before now.
+func GetDueSchedules(pool *pgxpool.Pool) ([]*Schedule, error) {
+	rows, err := pool.Query(context.Background(), `
+		SELECT id, name, description, cron, template, project_id, enabled, last_run, next_run, created_at
+		FROM schedules WHERE enabled = true AND next_run <= NOW()
+		ORDER BY next_run ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("getting due schedules: %w", err)
+	}
+	defer rows.Close()
+
+	var schedules []*Schedule
+	for rows.Next() {
+		var s Schedule
+		if err := rows.Scan(&s.ID, &s.Name, &s.Description, &s.Cron, &s.Template,
+			&s.ProjectID, &s.Enabled, &s.LastRun, &s.NextRun, &s.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scanning schedule: %w", err)
+		}
+		schedules = append(schedules, &s)
+	}
+	return schedules, rows.Err()
+}
+
+// UpdateScheduleAfterRun updates last_run and next_run after instantiation.
+func UpdateScheduleAfterRun(pool *pgxpool.Pool, name string, lastRun, nextRun time.Time) error {
+	_, err := pool.Exec(context.Background(), `
+		UPDATE schedules SET last_run = $2, next_run = $3 WHERE name = $1
+	`, name, lastRun, nextRun)
+	return err
+}
+
 func scanTasks(rows pgx.Rows) ([]*Task, error) {
 	var tasks []*Task
 	for rows.Next() {
@@ -887,6 +1246,7 @@ func scanTasks(rows pgx.Rows) ([]*Task, error) {
 			&t.ID, &t.Title, &t.Body, &t.Status, &t.Priority, &t.Capability,
 			&t.ClaimedBy, &t.ClaimedAt, &t.DoneAt, &t.CreatedAt, &t.Attempt,
 			&t.MaxAttempts, &t.ProjectID, &t.Metadata,
+			&t.RequiresApproval, &t.ApprovedBy, &t.ApprovedAt, &t.RejectionReason,
 		); err != nil {
 			return nil, fmt.Errorf("scanning task: %w", err)
 		}
