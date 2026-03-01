@@ -36,7 +36,7 @@ func TestTaskJSONTags(t *testing.T) {
 	}
 
 	// Omitempty fields should not appear when nil/zero.
-	omittedFields := []string{`"capability"`, `"claimed_by"`, `"claimed_at"`, `"done_at"`, `"project_id"`}
+	omittedFields := []string{`"claimed_by"`, `"claimed_at"`, `"done_at"`, `"project_id"`}
 	for _, f := range omittedFields {
 		if strings.Contains(s, f) {
 			t.Errorf("expected %s to be omitted from JSON, got: %s", f, s)

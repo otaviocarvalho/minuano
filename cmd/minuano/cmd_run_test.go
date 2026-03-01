@@ -17,7 +17,7 @@ func TestRunCommandRegistered(t *testing.T) {
 
 func TestRunCommandFlags(t *testing.T) {
 	flags := runCmd.Flags()
-	expected := []string{"agents", "names", "capability", "attach"}
+	expected := []string{"agents", "names", "attach"}
 	for _, name := range expected {
 		if flags.Lookup(name) == nil {
 			t.Errorf("expected flag --%s on run command", name)

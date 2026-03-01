@@ -4,7 +4,6 @@
 set -euo pipefail
 
 AGENT_ID="${AGENT_ID:?AGENT_ID not set}"
-CAPABILITY="${CAPABILITY:-}"
 DB="${DATABASE_URL:?DATABASE_URL not set}"
 
 # Parse optional --project flag.
@@ -30,7 +29,6 @@ psql "$DB" -t -A -c "
     WHERE id=(
       SELECT id FROM tasks
       WHERE status='ready'
-        AND (capability IS NULL OR capability='$CAPABILITY')
         $PROJECT_FILTER
         AND attempt < max_attempts
       ORDER BY priority DESC, created_at ASC

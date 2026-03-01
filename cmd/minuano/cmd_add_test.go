@@ -87,7 +87,7 @@ func TestAddCommandRegistered(t *testing.T) {
 func TestAddCommandFlags(t *testing.T) {
 	flags := addCmd.Flags()
 
-	expected := []string{"after", "priority", "capability", "test-cmd", "project", "body"}
+	expected := []string{"after", "priority", "test-cmd", "project", "body"}
 	for _, name := range expected {
 		if flags.Lookup(name) == nil {
 			t.Errorf("expected flag --%s on add command", name)

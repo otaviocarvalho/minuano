@@ -13,11 +13,10 @@ import (
 )
 
 var (
-	runAgents     int
-	runNames      string
-	runCapability string
-	runAttach     bool
-	runWorktrees  bool
+	runAgents    int
+	runNames     string
+	runAttach    bool
+	runWorktrees bool
 )
 
 var runCmd = &cobra.Command{
@@ -97,7 +96,6 @@ var runCmd = &cobra.Command{
 func init() {
 	runCmd.Flags().IntVar(&runAgents, "agents", 1, "number of agents to spawn")
 	runCmd.Flags().StringVar(&runNames, "names", "", "comma-separated agent names")
-	runCmd.Flags().StringVar(&runCapability, "capability", "", "agent capability")
 	runCmd.Flags().BoolVar(&runAttach, "attach", false, "attach to tmux session after spawning")
 	runCmd.Flags().BoolVar(&runWorktrees, "worktrees", false, "isolate each agent in a git worktree")
 	rootCmd.AddCommand(runCmd)

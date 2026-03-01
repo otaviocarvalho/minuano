@@ -6,7 +6,6 @@ CREATE TABLE tasks (
   status       TEXT        NOT NULL DEFAULT 'pending',
     -- pending | ready | claimed | done | failed
   priority     INTEGER     NOT NULL DEFAULT 5,
-  capability   TEXT,                          -- NULL = any agent
   claimed_by   TEXT,
   claimed_at   TIMESTAMPTZ,
   done_at      TIMESTAMPTZ,

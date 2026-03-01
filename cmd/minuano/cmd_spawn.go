@@ -11,8 +11,7 @@ import (
 )
 
 var (
-	spawnCapability string
-	spawnWorktrees  bool
+	spawnWorktrees bool
 )
 
 var spawnCmd = &cobra.Command{
@@ -74,7 +73,6 @@ var spawnCmd = &cobra.Command{
 }
 
 func init() {
-	spawnCmd.Flags().StringVar(&spawnCapability, "capability", "", "agent capability")
 	spawnCmd.Flags().BoolVar(&spawnWorktrees, "worktrees", false, "isolate agent in a git worktree")
 	rootCmd.AddCommand(spawnCmd)
 }

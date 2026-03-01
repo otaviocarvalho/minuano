@@ -53,9 +53,6 @@ var showCmd = &cobra.Command{
 		}
 		fmt.Println()
 		fmt.Printf("Priority: %d\n", task.Priority)
-		if task.Capability != nil {
-			fmt.Printf("Capability: %s\n", *task.Capability)
-		}
 		if task.ClaimedBy != nil {
 			fmt.Printf("Claimed by: %s\n", *task.ClaimedBy)
 		}

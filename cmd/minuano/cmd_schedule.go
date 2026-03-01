@@ -199,7 +199,6 @@ type TemplateNode struct {
 	Title            string   `json:"title"`
 	Body             string   `json:"body"`
 	Priority         int      `json:"priority"`
-	Capability       string   `json:"capability"`
 	TestCmd          string   `json:"test_cmd"`
 	RequiresApproval bool     `json:"requires_approval"`
 	After            []string `json:"after"`
@@ -219,11 +218,6 @@ func instantiateTemplate(templateJSON json.RawMessage, projectID *string) ([]str
 	for _, node := range nodes {
 		id := generateID(node.Title)
 
-		var capPtr *string
-		if node.Capability != "" {
-			capPtr = &node.Capability
-		}
-
 		var metadata json.RawMessage
 		if node.TestCmd != "" {
 			m := map[string]string{"test_cmd": node.TestCmd}
@@ -235,7 +229,7 @@ func instantiateTemplate(templateJSON json.RawMessage, projectID *string) ([]str
 			priority = 5
 		}
 
-		if err := db.CreateTask(pool, id, node.Title, node.Body, priority, capPtr, projectID, metadata, node.RequiresApproval); err != nil {
+		if err := db.CreateTask(pool, id, node.Title, node.Body, priority, projectID, metadata, node.RequiresApproval); err != nil {
 			return createdIDs, fmt.Errorf("creating task %q: %w", node.Title, err)
 		}
 

@@ -117,9 +117,6 @@ func buildSinglePrompt(task *db.Task, ctxs []*db.TaskContext) string {
 	b.WriteString("# Task: " + task.Title + "\n\n")
 	b.WriteString("**ID:** `" + task.ID + "`\n")
 	b.WriteString(fmt.Sprintf("**Priority:** %d\n", task.Priority))
-	if task.Capability != nil {
-		b.WriteString("**Capability:** " + *task.Capability + "\n")
-	}
 	b.WriteString("\n")
 
 	if task.Body != "" {
@@ -134,8 +131,10 @@ func buildSinglePrompt(task *db.Task, ctxs []*db.TaskContext) string {
 	b.WriteString("2. Read the context above (inherited findings, handoffs, test failures).\n")
 	b.WriteString("3. Work on the task. Use `minuano-observe " + task.ID + " \"<note>\"` to record findings.\n")
 	b.WriteString("4. Use `minuano-handoff " + task.ID + " \"<note>\"` before long operations.\n")
-	b.WriteString("5. When done: `minuano-done " + task.ID + " \"<summary>\"`\n")
-	b.WriteString("\n**CRITICAL:** You MUST call `minuano-done` to mark the task complete. Without it, the task stays claimed and blocks the pipeline. Do NOT use any other mechanism to track completion.\n")
+	b.WriteString("5. Commit your changes (skip if in worktree mode — `minuano-done` auto-commits):\n")
+	b.WriteString("   `git add <files> && git commit -m \"<message>\"`\n")
+	b.WriteString("6. When done: `minuano-done " + task.ID + " \"<summary>\"`\n")
+	b.WriteString("\n**CRITICAL:** You MUST commit before calling `minuano-done` (unless in worktree mode where `$WORKTREE_DIR` is set — then `minuano-done` auto-commits). You MUST call `minuano-done` to mark the task complete. Without it, the task stays claimed and blocks the pipeline. Do NOT use any other mechanism to track completion.\n")
 	b.WriteString("\n**Rule:** Do NOT loop. Complete this single task and return to interactive mode.\n\n")
 
 	b.WriteString(promptEnvSection())
@@ -161,11 +160,14 @@ func buildAutoPrompt(project string) string {
 	b.WriteString("   - `context[].kind == \"test_failure\"`: what broke last time — fix exactly this\n\n")
 	b.WriteString("3. **Work** on the task. Record observations with `minuano-observe <id> \"<note>\"`.\n\n")
 	b.WriteString("4. **Handoff** before long operations: `minuano-handoff <id> \"<note>\"`.\n\n")
-	b.WriteString("5. **Submit**: `minuano-done <id> \"<summary>\"`\n")
+	b.WriteString("5. **Commit** (skip if in worktree mode — `minuano-done` auto-commits):\n")
+	b.WriteString("   `git add <files> && git commit -m \"<message>\"`\n\n")
+	b.WriteString("6. **Submit**: `minuano-done <id> \"<summary>\"`\n")
 	b.WriteString("   - Tests pass → task marked done, loop back to step 1\n")
 	b.WriteString("   - Tests fail → failure recorded, task reset. Loop back to step 1.\n\n")
 
 	b.WriteString("## Rules\n\n")
+	b.WriteString("- Always commit before calling `minuano-done` (unless in worktree mode).\n")
 	b.WriteString("- Never mark a task done without calling `minuano-done`. It runs the tests.\n")
 	b.WriteString("- If you see a `test_failure` context entry: fix only what broke.\n")
 	b.WriteString("- One task per loop iteration.\n")
@@ -208,7 +210,8 @@ func buildBatchPrompt(entries []taskWithContext) string {
 		b.WriteString("### Steps\n\n")
 		b.WriteString("1. `minuano-pick " + e.task.ID + "`\n")
 		b.WriteString("2. Work on the task. Use `minuano-observe` for findings.\n")
-		b.WriteString("3. `minuano-done " + e.task.ID + " \"<summary>\"`\n\n")
+		b.WriteString("3. Commit (skip if worktree mode): `git add <files> && git commit -m \"<message>\"`\n")
+		b.WriteString("4. `minuano-done " + e.task.ID + " \"<summary>\"`\n\n")
 	}
 
 	b.WriteString("---\n\n")

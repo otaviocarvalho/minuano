@@ -16,7 +16,6 @@ import (
 var (
 	addAfter            []string
 	addPriority         int
-	addCapability       string
 	addTestCmd          string
 	addProject          string
 	addBody             string
@@ -41,11 +40,6 @@ var addCmd = &cobra.Command{
 		title := strings.Join(args, " ")
 		id := generateID(title)
 
-		var capability *string
-		if addCapability != "" {
-			capability = &addCapability
-		}
-
 		projectID := addProject
 		if projectID == "" {
 			projectID = os.Getenv("MINUANO_PROJECT")
@@ -61,7 +55,7 @@ var addCmd = &cobra.Command{
 			metadata, _ = json.Marshal(m)
 		}
 
-		if err := db.CreateTask(pool, id, title, addBody, addPriority, capability, projPtr, metadata, addRequiresApproval); err != nil {
+		if err := db.CreateTask(pool, id, title, addBody, addPriority, projPtr, metadata, addRequiresApproval); err != nil {
 			return err
 		}
 
@@ -107,7 +101,6 @@ var addCmd = &cobra.Command{
 func init() {
 	addCmd.Flags().StringSliceVar(&addAfter, "after", nil, "dependency task ID (partial ok, repeatable)")
 	addCmd.Flags().IntVar(&addPriority, "priority", 5, "priority 0-10")
-	addCmd.Flags().StringVar(&addCapability, "capability", "", "required agent capability")
 	addCmd.Flags().StringVar(&addTestCmd, "test-cmd", "", "test command override")
 	addCmd.Flags().StringVar(&addProject, "project", "", "project ID (or MINUANO_PROJECT env)")
 	addCmd.Flags().StringVar(&addBody, "body", "", "task body/specification")

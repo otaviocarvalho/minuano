@@ -17,8 +17,7 @@ The `minuano` binary is **not on the default PATH**. Always use the absolute pat
 3. **NEVER** execute tasks yourself — only plan them.
 4. Use `--after <id>` to express dependencies between tasks.
 5. Use `--requires-approval` on tasks that need human sign-off before execution.
-6. Use `--capability` to route tasks to agents with the right skills.
-7. Use `--priority 0-10` to express execution order preference.
+6. Use `--priority 0-10` to express execution order preference.
 8. Use `--body` to write detailed specifications for each task.
 
 ## Workflow

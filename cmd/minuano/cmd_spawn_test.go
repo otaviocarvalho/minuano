@@ -22,7 +22,7 @@ func TestSpawnRequiresArg(t *testing.T) {
 }
 
 func TestSpawnCommandFlags(t *testing.T) {
-	if spawnCmd.Flags().Lookup("capability") == nil {
-		t.Error("expected --capability flag on spawn command")
+	if spawnCmd.Flags().Lookup("worktrees") == nil {
+		t.Error("expected --worktrees flag on spawn command")
 	}
 }

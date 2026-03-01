@@ -17,7 +17,6 @@ type Task struct {
 	Body             string          `json:"body"`
 	Status           string          `json:"status"`
 	Priority         int             `json:"priority"`
-	Capability       *string         `json:"capability,omitempty"`
 	ClaimedBy        *string         `json:"claimed_by,omitempty"`
 	ClaimedAt        *time.Time      `json:"claimed_at,omitempty"`
 	DoneAt           *time.Time      `json:"done_at,omitempty"`
@@ -75,7 +74,7 @@ type MergeQueueEntry struct {
 }
 
 // taskColumns is the canonical SELECT column list for tasks.
-const taskColumns = `id, title, body, status, priority, capability, claimed_by, claimed_at,
+const taskColumns = `id, title, body, status, priority, claimed_by, claimed_at,
 		       done_at, created_at, attempt, max_attempts, project_id, metadata,
 		       requires_approval, approved_by, approved_at, rejection_reason`
 
@@ -83,7 +82,7 @@ const taskColumns = `id, title, body, status, priority, capability, claimed_by, 
 func scanTask(row pgx.Row) (Task, error) {
 	var t Task
 	err := row.Scan(
-		&t.ID, &t.Title, &t.Body, &t.Status, &t.Priority, &t.Capability,
+		&t.ID, &t.Title, &t.Body, &t.Status, &t.Priority,
 		&t.ClaimedBy, &t.ClaimedAt, &t.DoneAt, &t.CreatedAt, &t.Attempt,
 		&t.MaxAttempts, &t.ProjectID, &t.Metadata,
 		&t.RequiresApproval, &t.ApprovedBy, &t.ApprovedAt, &t.RejectionReason,
@@ -98,11 +97,11 @@ type TreeNode struct {
 }
 
 // CreateTask inserts a new task.
-func CreateTask(pool *pgxpool.Pool, id, title, body string, priority int, capability, projectID *string, metadata json.RawMessage, requiresApproval bool) error {
+func CreateTask(pool *pgxpool.Pool, id, title, body string, priority int, projectID *string, metadata json.RawMessage, requiresApproval bool) error {
 	_, err := pool.Exec(context.Background(), `
-		INSERT INTO tasks (id, title, body, priority, capability, project_id, metadata, requires_approval)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, id, title, body, priority, capability, projectID, metadata, requiresApproval)
+		INSERT INTO tasks (id, title, body, priority, project_id, metadata, requires_approval)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, id, title, body, priority, projectID, metadata, requiresApproval)
 	if err != nil {
 		return fmt.Errorf("creating task: %w", err)
 	}
@@ -236,7 +235,7 @@ func GetTaskWithContext(pool *pgxpool.Pool, id string) (*Task, []*TaskContext, e
 
 // AtomicClaim atomically claims one ready task, injects inherited context, and updates the agent.
 // Returns nil if no task is available. When projectID is non-nil, only claims from that project.
-func AtomicClaim(pool *pgxpool.Pool, agentID string, capability *string, projectID *string) (*Task, error) {
+func AtomicClaim(pool *pgxpool.Pool, agentID string, projectID *string) (*Task, error) {
 	ctx := context.Background()
 
 	tx, err := pool.Begin(ctx)
@@ -245,11 +244,6 @@ func AtomicClaim(pool *pgxpool.Pool, agentID string, capability *string, project
 	}
 	defer tx.Rollback(ctx)
 
-	// Claim one ready task.
-	var cap interface{}
-	if capability != nil {
-		cap = *capability
-	}
 	var proj interface{}
 	if projectID != nil {
 		proj = *projectID
@@ -264,15 +258,14 @@ func AtomicClaim(pool *pgxpool.Pool, agentID string, capability *string, project
 		WHERE  id = (
 			SELECT id FROM tasks
 			WHERE  status = 'ready'
-			  AND  (capability IS NULL OR capability = $2)
-			  AND  ($3::text IS NULL OR project_id = $3)
+			  AND  ($2::text IS NULL OR project_id = $2)
 			  AND  attempt < max_attempts
 			ORDER  BY priority DESC, created_at ASC
 			LIMIT  1
 			FOR UPDATE SKIP LOCKED
 		)
 		RETURNING `+taskColumns+`
-	`, agentID, cap, proj))
+	`, agentID, proj))
 	if claimErr == pgx.ErrNoRows {
 		return nil, nil // No task available.
 	}
@@ -1243,7 +1236,7 @@ func scanTasks(rows pgx.Rows) ([]*Task, error) {
 	for rows.Next() {
 		var t Task
 		if err := rows.Scan(
-			&t.ID, &t.Title, &t.Body, &t.Status, &t.Priority, &t.Capability,
+			&t.ID, &t.Title, &t.Body, &t.Status, &t.Priority,
 			&t.ClaimedBy, &t.ClaimedAt, &t.DoneAt, &t.CreatedAt, &t.Attempt,
 			&t.MaxAttempts, &t.ProjectID, &t.Metadata,
 			&t.RequiresApproval, &t.ApprovedBy, &t.ApprovedAt, &t.RejectionReason,

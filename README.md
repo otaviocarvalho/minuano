@@ -20,6 +20,29 @@ See [AI Orchestration: Reinventing Linda](https://otavio.cat/posts/ai-orchestrat
 4. When a task completes, its dependents become ready automatically (via a Postgres trigger).
 5. Agents loop until the queue is empty.
 
+## Task lifecycle
+
+```
+               ┌─────────────────────────────────────────┐
+               │                                         │
+  draft ──→ pending ──→ ready ──→ claimed ──→ done       │
+               │                    │                    │
+               │                    └──→ failed          │
+               │                                         │
+               └──→ pending_approval ──→ ready ──→ ...   │
+                         │                               │
+                         └──→ rejected                   │
+```
+
+- **draft** — created by schedule templates, not yet released
+- **pending** — has unmet dependencies, waiting for them to complete
+- **ready** — all deps met, available for agents to claim
+- **claimed** — an agent is actively working on it
+- **done** — tests passed, result recorded
+- **failed** — max attempts exhausted
+- **pending_approval** — all deps met but `requires_approval=true`, waiting for human review
+- **rejected** — human rejected the task during approval
+
 With `--worktrees`, each agent works in an isolated git worktree. On task completion, changes auto-commit and enqueue for merge via `minuano merge`.
 
 ## Quick start
@@ -77,6 +100,8 @@ Both share the same Minuano database. Tramuntana calls Minuano commands under th
 | `--test-cmd <str>` | Test command override | `go test ./...` |
 | `--project <id>` | Project ID | `$MINUANO_PROJECT` |
 | `--body <str>` | Task specification body | — |
+| `--status <str>` | Initial status: `ready` or `draft` | `ready` |
+| `--requires-approval` | Require human approval before execution | `false` |
 
 **`minuano show <id>`** — Print task spec + full context log
 
@@ -145,6 +170,88 @@ Both share the same Minuano database. Tramuntana calls Minuano commands under th
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--minutes <n>` | Stale threshold | `30` |
+
+**`minuano unclaim <id>`** — Release a specific claimed task back to ready (manual override for crashed agents)
+
+### Approval workflow
+
+**`minuano approve <id>`** — Approve a task in `pending_approval` status, transitioning it to `ready`
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--by <name>` | Approver identity | `$APPROVER_ID` or `cli` |
+
+**`minuano reject <id>`** — Reject a task in `pending_approval` status
+
+| Flag | Description |
+|------|-------------|
+| `--reason <str>` | Rejection reason |
+
+**`minuano draft-release [id]`** — Release draft tasks for execution
+
+| Flag | Description |
+|------|-------------|
+| `--all` | Release all draft tasks in the project |
+| `--project <id>` | Project ID (required with `--all`) |
+
+Tasks with unmet dependencies go to `pending`; tasks with all deps met go to `ready`.
+
+### Schedules
+
+**`minuano schedule add <name>`** — Create a recurring schedule
+
+| Flag | Description |
+|------|-------------|
+| `--cron <expr>` | Cron expression (required) |
+| `--template <path>` | Path to template JSON file (required) |
+| `--project <id>` | Project ID |
+| `--description <str>` | Schedule description |
+
+The template is a JSON array of task nodes with `ref`, `title`, `body`, `priority`, `capability`, `requires_approval`, and `after` (dependency refs) fields. Tasks are created as `draft` status.
+
+**`minuano schedule list`** — List schedules
+
+| Flag | Description |
+|------|-------------|
+| `--project <id>` | Filter by project |
+
+**`minuano schedule run <name>`** — Immediately instantiate a schedule's template (creates draft tasks)
+
+**`minuano schedule disable <name>`** — Disable a schedule
+
+**`minuano schedule enable <name>`** — Enable a schedule (recomputes next run)
+
+### Cron
+
+**`minuano cron tick`** — Long-running cron daemon that polls for due schedules every 30 seconds and instantiates their templates.
+
+Example systemd unit:
+
+```ini
+[Unit]
+Description=Minuano Cron Tick
+After=postgresql.service
+
+[Service]
+ExecStart=/usr/local/bin/minuano cron tick
+Environment=DATABASE_URL=postgres://minuano:minuano@localhost:5432/minuanodb
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Planner
+
+**`minuano planner`** — Manage planner sessions (used by Tramuntana's `/plan` command)
+
+| Subcommand | Description |
+|------------|-------------|
+| `start <topic-id>` | Create/reopen a planner session |
+| `stop <topic-id>` | Stop an active planner session |
+| `status <topic-id>` | Show planner session status |
+| `list` | List all planner sessions |
 
 ### Prompt generation
 
